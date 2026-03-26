@@ -8,7 +8,7 @@ on:
 env:
   PROJECT_ID: waahi-2026
   REGION: asia-south1
-  SERVICE_NAME: godai
+  SERVICE_NAME: oh-my-ai
   REPOSITORY: cloudrun-repo
 
 concurrency:

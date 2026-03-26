@@ -1,4 +1,4 @@
-# godai
+# oh-my-ai
 
 Node.js proxy server for automatic API key rotation across multiple LLM providers (OpenAI, Gemini, Groq, OpenRouter, etc.). ***Zero external dependencies***.
 
@@ -18,8 +18,8 @@ Node.js proxy server for automatic API key rotation across multiple LLM provider
 ## Quick Start
 
 ```bash
-git clone https://github.com/p32929/godai.git
-cd godai
+git clone https://github.com/ideo-mind/oh-my-ai.git
+cd oh-my-ai
 # Edit config.toml and set server.adminPassword
 # Optional: export PORT to override the configured/default port
 # Install Bun and run
