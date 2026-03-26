@@ -17,6 +17,8 @@ export class ProxyServer {
     this.server = null;
     this.adminSessionToken = null;
     this.logBuffer = [];
+    this.logHistory = this.logBuffer;
+    this.sseLogClients = new Map();
     this.logFilePath = this.resolveLogFilePath();
     this.ensureLogFileDirectory();
     this.responseStorage = new Map(); // Store response data for viewing
@@ -654,12 +656,32 @@ export class ProxyServer {
 
     // Handle logout
     if (path === '/admin/logout' && req.method === 'POST') {
+      this.closeAllSseLogClients();
       this.adminSessionToken = null;
       res.writeHead(200, {
         'Content-Type': 'application/json',
         'Set-Cookie': 'adminSession=; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/admin'
       });
       res.end(JSON.stringify({ success: true }));
+      return;
+    }
+
+    if (path === '/admin/api/logs/stream' && req.method === 'GET') {
+      this.handleLogsStream(req, res);
+      return;
+    }
+
+    if (path === '/admin/api/metrics' && req.method === 'GET') {
+      if (!this.canAccessAdminApi(req)) {
+        res.writeHead(401, {
+          'Content-Type': 'application/json',
+          'WWW-Authenticate': 'Basic realm="admin"'
+        });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+
+      await this.handleGetMetrics(res);
       return;
     }
 
@@ -793,6 +815,142 @@ export class ProxyServer {
 
   getAdminPassword() {
     return this.config.getAdminPassword();
+  }
+
+  validateAdminRequest(req) {
+    const adminPassword = this.getAdminPassword();
+    if (!adminPassword) {
+      return false;
+    }
+
+    const authHeader = req.headers?.authorization;
+    if (!authHeader || typeof authHeader !== 'string') {
+      return false;
+    }
+
+    const [scheme, token] = authHeader.split(' ');
+    if (scheme !== 'Basic' || !token) {
+      return false;
+    }
+
+    try {
+      const decoded = Buffer.from(token, 'base64').toString('utf8');
+      const idx = decoded.indexOf(':');
+      if (idx === -1) {
+        return false;
+      }
+
+      const username = decoded.slice(0, idx);
+      const password = decoded.slice(idx + 1);
+
+      return username === 'admin' && password === adminPassword;
+    } catch {
+      return false;
+    }
+  }
+
+  canAccessAdminApi(req) {
+    return this.isAdminAuthenticated(req) || this.validateAdminRequest(req);
+  }
+
+  handleLogsStream(req, res) {
+    if (!this.canAccessAdminApi(req)) {
+      res.writeHead(401, {
+        'Content-Type': 'application/json',
+        'WWW-Authenticate': 'Basic realm="admin", charset="UTF-8"'
+      });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders();
+    }
+
+    if (res.socket) {
+      res.socket.setTimeout(0);
+      res.socket.setNoDelay(true);
+      res.socket.setKeepAlive(true);
+    }
+
+    const clientId = crypto.randomBytes(12).toString('hex');
+
+    const keepAliveInterval = setInterval(() => {
+      try {
+        const ok = res.write(`: ping ${Date.now()}\n\n`);
+        if (!ok) {
+          this.removeSseLogClient(clientId);
+        }
+      } catch {
+        this.removeSseLogClient(clientId);
+      }
+    }, 15000);
+
+    this.sseLogClients.set(clientId, { res, keepAliveInterval });
+
+    const cleanup = () => {
+      this.removeSseLogClient(clientId);
+    };
+
+    req.on('close', cleanup);
+    res.on('close', cleanup);
+    res.on('error', cleanup);
+
+    this.writeSseEventToClient(clientId, 'connected', {
+      ok: true,
+      now: new Date().toISOString()
+    });
+  }
+
+  removeSseLogClient(clientId) {
+    const client = this.sseLogClients.get(clientId);
+    if (!client) {
+      return;
+    }
+
+    this.sseLogClients.delete(clientId);
+
+    try {
+      clearInterval(client.keepAliveInterval);
+    } catch {}
+
+    try {
+      if (client.res && !client.res.writableEnded) {
+        client.res.end();
+      }
+    } catch {}
+  }
+
+  closeAllSseLogClients() {
+    for (const clientId of Array.from(this.sseLogClients.keys())) {
+      this.removeSseLogClient(clientId);
+    }
+  }
+
+  writeSseEventToClient(clientId, eventName, data) {
+    const client = this.sseLogClients.get(clientId);
+    if (!client) {
+      return;
+    }
+
+    const payload = typeof data === 'string' ? data : JSON.stringify(data);
+    const frame = `event: ${eventName}\ndata: ${payload}\n\n`;
+
+    try {
+      const ok = client.res.write(frame);
+      if (!ok) {
+        this.removeSseLogClient(clientId);
+      }
+    } catch {
+      this.removeSseLogClient(clientId);
+    }
   }
 
 
@@ -981,6 +1139,146 @@ export class ProxyServer {
     }
   }
 
+  async handleGetMetrics(res) {
+    try {
+      const logs = Array.isArray(this.logHistory) ? this.logHistory : [];
+      const payload = this.buildHealthMetricsPayload(logs);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    } catch (error) {
+      console.error('Failed to get metrics:', error?.message || String(error));
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Failed to calculate metrics' }));
+    }
+  }
+
+  buildHealthMetricsPayload(logs) {
+    const initAcc = () => ({
+      totalRequests: 0,
+      count429: 0,
+      count400: 0,
+      success: 0,
+      latencySum: 0,
+      latencyCount: 0
+    });
+
+    const updateAcc = (acc, log) => {
+      const status = log.status;
+      acc.totalRequests += 1;
+
+      if (status === 429) {
+        acc.count429 += 1;
+      }
+      if (status === 400) {
+        acc.count400 += 1;
+      }
+      if (typeof status === 'number' && status < 400) {
+        acc.success += 1;
+      }
+
+      if (typeof log.responseTime === 'number' && Number.isFinite(log.responseTime)) {
+        acc.latencySum += log.responseTime;
+        acc.latencyCount += 1;
+      }
+    };
+
+    const finalize = (acc) => {
+      const averageLatency = acc.latencyCount > 0 ? acc.latencySum / acc.latencyCount : null;
+      const healthScore = acc.totalRequests > 0
+        ? Math.round((acc.success / acc.totalRequests) * 10000) / 100
+        : null;
+
+      return {
+        totalRequests: acc.totalRequests,
+        '429Count': acc.count429,
+        '400Count': acc.count400,
+        averageLatency,
+        healthScore
+      };
+    };
+
+    const completed = (Array.isArray(logs) ? logs : []).filter((log) => (
+      log && typeof log === 'object' && typeof log.status === 'number'
+    ));
+
+    const minuteBuckets = new Map();
+
+    const overallAcc = initAcc();
+    const providers = {};
+
+    for (const log of completed) {
+      updateAcc(overallAcc, log);
+
+      const bucketDate = new Date(log.timestamp || Date.now());
+      if (!Number.isNaN(bucketDate.getTime())) {
+        bucketDate.setSeconds(0, 0);
+        const bucketKey = bucketDate.toISOString();
+        if (!minuteBuckets.has(bucketKey)) {
+          minuteBuckets.set(bucketKey, {
+            timestamp: bucketKey,
+            requests: 0,
+            latencySum: 0,
+            latencyCount: 0
+          });
+        }
+
+        const bucket = minuteBuckets.get(bucketKey);
+        bucket.requests += 1;
+        if (typeof log.responseTime === 'number' && Number.isFinite(log.responseTime)) {
+          bucket.latencySum += log.responseTime;
+          bucket.latencyCount += 1;
+        }
+      }
+
+      const providerName = log.provider || 'unknown';
+      if (!providers[providerName]) {
+        providers[providerName] = { acc: initAcc(), keys: {} };
+      }
+      updateAcc(providers[providerName].acc, log);
+
+      const keyLabel = log.apiKeyLabel || log.apiKeyMasked || log.apiKeyId;
+      if (keyLabel) {
+        if (!providers[providerName].keys[keyLabel]) {
+          providers[providerName].keys[keyLabel] = initAcc();
+        }
+        updateAcc(providers[providerName].keys[keyLabel], log);
+      }
+    }
+
+    const providerPayload = {};
+    for (const providerName of Object.keys(providers)) {
+      const providerEntry = providers[providerName];
+      const keysPayload = {};
+      for (const keyLabel of Object.keys(providerEntry.keys)) {
+        keysPayload[keyLabel] = finalize(providerEntry.keys[keyLabel]);
+      }
+
+      providerPayload[providerName] = {
+        ...finalize(providerEntry.acc),
+        keys: keysPayload
+      };
+    }
+
+    const timeline = Array.from(minuteBuckets.values())
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      .slice(-20)
+      .map((bucket) => ({
+        timestamp: bucket.timestamp,
+        requests: bucket.requests,
+        averageLatency: bucket.latencyCount > 0 ? Math.round((bucket.latencySum / bucket.latencyCount) * 100) / 100 : null
+      }));
+
+    return {
+      source: 'memory',
+      entries: Array.isArray(logs) ? logs.length : 0,
+      completedRequests: completed.length,
+      overall: finalize(overallAcc),
+      providers: providerPayload,
+      timeline
+    };
+  }
+
 
   logApiRequest(requestId, method, endpoint, provider, status = null, responseTime = null, error = null, clientIp = null, meta = {}) {
     const logEntry = {
@@ -999,13 +1297,26 @@ export class ProxyServer {
       apiKeyLabel: meta.apiKeyLabel || meta.apiKeyMasked || meta.apiKeyId || null
     };
 
-    // Add to buffer (keep last 100 entries in RAM only)
-    this.logBuffer.push(logEntry);
+    this.logRequest(logEntry);
+  }
+
+  logRequest(logEntry) {
+    const normalized = this.normalizeLogEntry(logEntry);
+
+    this.logBuffer.push(normalized);
     if (this.logBuffer.length > 100) {
       this.logBuffer.shift();
     }
 
-    this.appendLogToFile(logEntry);
+    this.appendLogToFile(normalized);
+
+    if (!this.sseLogClients || this.sseLogClients.size === 0) {
+      return;
+    }
+
+    for (const clientId of Array.from(this.sseLogClients.keys())) {
+      this.writeSseEventToClient(clientId, 'log', normalized);
+    }
   }
 
 
