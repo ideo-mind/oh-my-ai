@@ -1,5 +1,11 @@
 # oh-my-ai
 
+## 1.0.2
+
+### Patch Changes
+
+- 8534b90: Create a default config file at `CONFIG_FILE` when missing so first run works out of the box, using default server settings and an admin password fallback.
+
 ## 1.0.1
 
 ### Patch Changes
