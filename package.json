@@ -1,6 +1,6 @@
 {
   "name": "oh-my-ai",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "main": "index.ts",
   "bin": {
     "oh-my-ai": "bin/oh-my-ai.ts"
@@ -15,7 +15,8 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release:changeset": "changeset publish",
-    "release:npm": "bun run release:changeset"
+    "release:npm": "bun run release:changeset",
+    "release": "./scripts/release.sh"
   },
   "keywords": [
     "bun",

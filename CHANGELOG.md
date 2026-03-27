@@ -1,5 +1,11 @@
 # oh-my-ai
 
+## 1.0.3
+
+### Patch Changes
+
+- 56b07d8: Update README for Bun-first positioning, align package description, and document Bun-native runner model.
+
 ## 1.0.2
 
 ### Patch Changes
