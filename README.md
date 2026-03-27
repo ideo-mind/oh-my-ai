@@ -82,6 +82,16 @@ curl -X POST "http://localhost:8990/gemini/models/gemini-2.5-flash:generateConte
 
 **Note**: Replace `your-access-key` with your provider's ACCESS_KEY if configured. If no ACCESS_KEY is set for the provider, you can omit the `[ACCESS_KEY:...]` parameter entirely.
 
+## Releases
+
+This repository uses Changesets for package versioning and changelog generation.
+
+- Create a changeset in your feature branch with `bun run changeset`
+- Merge to `main` and the Changesets workflow opens or updates the version PR
+- Push a version tag like `v1.0.0` to trigger binary release artifacts and the `release:changeset` publish flow
+
+`CHANGELOG.md` is generated automatically when Changesets versions are applied.
+
 
 ### Screenshot
 

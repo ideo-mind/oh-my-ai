@@ -11,7 +11,8 @@
     "dev": "bun --watch run index.ts",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release:npm": "changeset publish"
+    "release:changeset": "changeset publish",
+    "release:npm": "bun run release:changeset"
   },
   "keywords": [
     "bun",
