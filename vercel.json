@@ -1,5 +1,12 @@
 {
-  "rewrites": [
-    { "source": "/", "destination": "/public/admin.html" }
+  "builds": [
+    {
+      "src": "Dockerfile",
+      "use": "@vercel/docker"
+    }
+  ],
+  "routes": [
+    { "src": "/public/(.*)", "dest": "/public/$1" },
+    { "src": "/(.*)", "dest": "/" }
   ]
 }
