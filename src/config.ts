@@ -107,7 +107,7 @@ export class Config {
     const dirPath = path.dirname(this.configPath);
     fs.mkdirSync(dirPath, { recursive: true });
     const text = TOML.stringify(defaultConfig as TOML.JsonMap);
-    fs.writeFileSync(this.configPath, text, 'utf8');
+    fs.writeFileSync(this.configPath, text, { encoding: 'utf8', mode: 0o600 });
     console.log(`[CONFIG] Created default config at ${this.configPath}`);
     return defaultConfig;
   }
