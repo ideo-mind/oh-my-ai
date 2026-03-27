@@ -7,11 +7,10 @@ then
     exit 1
 fi
 
-# 1. Select version bump type
-VERSION_TYPE=$(gum choose "patch" "minor" "major")
-
 # 2. Add a changeset if none exists
 if [ ! -d ".changeset" ]; then
+    # 1. Select version bump type
+    VERSION_TYPE=$(gum choose "patch" "minor" "major")
     gum log --level info "No changesets found. Creating a default one."
     bun run changeset add --empty --"$VERSION_TYPE" --message="chore: release"
 fi
@@ -34,7 +33,8 @@ TAG_MESSAGE=$(gum input --placeholder "Enter a tag message (optional)")
 if [ -n "$TAG_MESSAGE" ]; then
     git tag -a "v$NEW_VERSION" -m "$TAG_MESSAGE"
 else
-    git tag "v$NEW_VERSION"
+    # Use the commit message as the tag message if no custom tag message is provided
+    git tag -a "v$NEW_VERSION" -m "chore: release v$NEW_VERSION"
 fi
 
 # 6. Ask to push commit and tag
