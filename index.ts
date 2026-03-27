@@ -35,5 +35,6 @@ if (isEntryPoint) {
   main();
 }
 
+export { main };
 export { Config, KeyRotator, GeminiClient, OpenAIClient, ProxyServer };
 export default { Config, KeyRotator, GeminiClient, OpenAIClient, ProxyServer };

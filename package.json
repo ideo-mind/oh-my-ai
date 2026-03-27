@@ -1,7 +1,10 @@
 {
   "name": "oh-my-ai",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "index.ts",
+  "bin": {
+    "oh-my-ai": "bin/oh-my-ai.ts"
+  },
   "scripts": {
     "start": "bun run index.ts",
     "build": "bun build index.ts --outdir .bun-build --target=bun",
