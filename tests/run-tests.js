@@ -59,6 +59,77 @@ await run('Config writes admin updates to CONFIG_FILE target', async () => {
   fs.rmdirSync(tempDir);
 });
 
+await run('Config exports TOML with redacted admin password', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oh-my-ai-toml-'));
+  const tempConfigPath = path.join(tempDir, 'config.toml');
+  fs.writeFileSync(tempConfigPath, [
+    '[server]',
+    'port = 8990',
+    'adminPassword = "super-secret"',
+    '',
+    '[provider.demo]',
+    'apiType = "openai"',
+    'apiKeys = ["sk-demo"]',
+  ].join('\n'));
+
+  process.env.CONFIG_FILE = tempConfigPath;
+  delete process.env.ADMIN_PASSWORD;
+  delete process.env.PORT;
+
+  const config = new Config();
+  const toml = config.toTomlFileString();
+
+  assert.match(toml, /adminPassword = ""/);
+  assert.match(toml, /\[provider\.demo\]/);
+  assert.doesNotMatch(toml, /super-secret/);
+
+  cleanupFile(tempConfigPath);
+  fs.rmdirSync(tempDir);
+});
+
+await run('Config imports TOML and preserves password when redacted', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oh-my-ai-import-'));
+  const tempConfigPath = path.join(tempDir, 'config.toml');
+  fs.writeFileSync(tempConfigPath, [
+    '[server]',
+    'port = 8990',
+    'adminPassword = "existing-password"',
+    '',
+    '[provider.old]',
+    'apiType = "openai"',
+    'apiKeys = ["sk-old"]',
+  ].join('\n'));
+
+  process.env.CONFIG_FILE = tempConfigPath;
+  delete process.env.ADMIN_PASSWORD;
+  delete process.env.PORT;
+
+  const config = new Config();
+  config.updateFromTomlString([
+    '[server]',
+    'port = 9123',
+    'adminPassword = ""',
+    '',
+    '[provider.replacement]',
+    'apiType = "gemini"',
+    'apiKeys = ["gm-new"]',
+    'defaultModel = "gemini-2.5-flash"',
+  ].join('\n'));
+
+  assert.equal(config.adminPassword, 'existing-password');
+  assert.equal(config.port, 9123);
+  assert.equal(config.providers.has('old'), false);
+  assert.equal(config.providers.has('replacement'), true);
+
+  const content = fs.readFileSync(tempConfigPath, 'utf8');
+  assert.match(content, /adminPassword = "existing-password"/);
+  assert.match(content, /\[provider\.replacement\]/);
+  assert.doesNotMatch(content, /\[provider\.old\]/);
+
+  cleanupFile(tempConfigPath);
+  fs.rmdirSync(tempDir);
+});
+
 await run('ProxyServer metrics payload includes timeline and provider health', async () => {
   const server = new ProxyServer({ getAdminPassword: () => 'test-admin' });
   const now = new Date();

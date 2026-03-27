@@ -290,6 +290,18 @@ export class Config {
     return `${lines}\n`;
   }
 
+  toTomlFileString() {
+    const sanitized: ConfigFile = {
+      server: {
+        ...(this.rawConfig.server ?? {}),
+        adminPassword: '',
+      },
+      provider: { ...(this.rawConfig.provider ?? {}) },
+    };
+
+    return TOML.stringify(sanitized as TOML.JsonMap);
+  }
+
   toAdminPayload(): AdminConfigPayload {
     return {
       providers: Array.from(this.providers.entries()).map(([name, config]) => ({
@@ -364,7 +376,7 @@ export class Config {
       provider: providers,
     };
 
-    this.writeConfigFile(configUpdate);
+    this.writeConfigFile(configUpdate, true);
     this.loadConfig();
   }
 
@@ -397,15 +409,41 @@ export class Config {
       provider: providers,
     };
 
-    this.writeConfigFile(configUpdate);
+    this.writeConfigFile(configUpdate, true);
     this.loadConfig();
   }
 
-  private writeConfigFile(config: ConfigFile) {
-    const merged: ConfigFile = {
-      server: { ...(this.rawConfig.server ?? {}), ...(config.server ?? {}) },
-      provider: { ...(this.rawConfig.provider ?? {}), ...(config.provider ?? {}) },
+  updateFromTomlString(tomlContent: string) {
+    const parsed = TOML.parse(tomlContent) as ConfigFile;
+    const nextConfig: ConfigFile = {
+      server: {
+        ...(parsed.server ?? {}),
+      },
+      provider: { ...(parsed.provider ?? {}) },
     };
+
+    const importedPassword = nextConfig.server?.adminPassword;
+    if (!importedPassword || importedPassword.trim().length === 0) {
+      nextConfig.server = {
+        ...(nextConfig.server ?? {}),
+        adminPassword: this.adminPassword,
+      };
+    }
+
+    this.writeConfigFile(nextConfig, true);
+    this.loadConfig();
+  }
+
+  private writeConfigFile(config: ConfigFile, replace = false) {
+    const merged: ConfigFile = replace
+      ? {
+          server: { ...(config.server ?? {}) },
+          provider: { ...(config.provider ?? {}) },
+        }
+      : {
+          server: { ...(this.rawConfig.server ?? {}), ...(config.server ?? {}) },
+          provider: { ...(this.rawConfig.provider ?? {}), ...(config.provider ?? {}) },
+        };
 
     const text = TOML.stringify(merged as TOML.JsonMap);
     fs.writeFileSync(this.configPath, text, 'utf8');

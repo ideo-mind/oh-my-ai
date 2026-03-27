@@ -17,7 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 COPY --from=builder /app/oh-my-ai ./
 COPY --from=builder /app/public ./public/
-COPY --from=builder /app/config.toml ./
+RUN mkdir -p /config
+COPY --from=builder /app/config.toml /config/config.toml
 
 EXPOSE 8990
 ENV PORT=8990

@@ -481,16 +481,28 @@
                             <div class="">
                                 <div class="flex items-center justify-between mb-4">
                                     <h3 class="text-lg font-medium tracking-tight">Configured Providers</h3>
-                                    <button
-                                        onclick="exportConfiguration()"
-                                        class="btn btn-secondary px-3 py-1.5 text-xs font-medium"
-                                        title="Copy all configuration as .env format to clipboard"
-                                    >
-                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                                        </svg>
-                                        Copy .env
-                                    </button>
+                                    <div class="flex items-center gap-2">
+                                        <button
+                                            onclick="openConfigImportDialog()"
+                                            class="btn btn-secondary px-3 py-1.5 text-xs font-medium"
+                                            title="Paste TOML and replace the current config"
+                                        >
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1M12 4v12m0 0l-4-4m4 4l4-4"></path>
+                                            </svg>
+                                            Import TOML
+                                        </button>
+                                        <button
+                                            onclick="exportConfiguration()"
+                                            class="btn btn-secondary px-3 py-1.5 text-xs font-medium"
+                                            title="Copy all configuration as TOML to clipboard"
+                                        >
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                                            </svg>
+                                            Copy TOML
+                                        </button>
+                                    </div>
                                 </div>
                                 <div id="providersContainer" class="space-y-4"></div>
                             </div>
@@ -827,6 +839,30 @@
             <div class="flex-1 min-h-0 bg-zinc-950 rounded-lg border border-border overflow-hidden">
                 <pre id="responseContent" class="text-emerald-400 p-4 text-sm h-full overflow-auto font-mono whitespace-pre-wrap"></pre>
                 <pre id="requestContent" class="text-amber-400 p-4 text-sm h-full overflow-auto font-mono whitespace-pre-wrap hidden"></pre>
+            </div>
+        </div>
+    </div>
+
+    <div id="configImportDialog" class="hidden fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 z-[115]">
+        <div class="w-full max-w-3xl bg-card border border-border rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div class="flex items-start justify-between gap-4 px-6 py-5 border-b border-border">
+                <div>
+                    <h3 class="text-lg font-semibold tracking-tight">Import config.toml</h3>
+                    <p class="text-sm text-muted-foreground mt-1">Paste TOML to replace the current provider configuration. Blank `adminPassword` keeps your current password.</p>
+                </div>
+                <button onclick="closeConfigImportDialog()" class="text-muted-foreground hover:text-foreground transition-colors p-1" title="Close import dialog">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <div class="px-6 py-5 flex-1 overflow-auto">
+                <textarea id="configImportTextarea" class="input-field w-full min-h-[360px] px-4 py-3 rounded-lg font-mono text-sm leading-6 resize-y" placeholder="Paste your config.toml here..."></textarea>
+                <div class="mt-3 text-xs text-muted-foreground">This replaces the current provider definitions and reinitializes clients immediately.</div>
+            </div>
+            <div class="px-6 py-4 border-t border-border bg-muted/20 flex items-center justify-end gap-3">
+                <button onclick="closeConfigImportDialog()" class="btn btn-secondary px-4 py-2 text-sm font-medium">Cancel</button>
+                <button id="importConfigButton" onclick="importConfiguration()" class="btn btn-primary px-4 py-2 text-sm font-medium">Import TOML</button>
             </div>
         </div>
     </div>
@@ -2265,26 +2301,79 @@ ${googApiKeyHeader}  -H "Content-Type: application/json" \\
             await copyToClipboard(curlCommand, `📋 cURL command copied for provider '${providerName}'! Ready to test in terminal.`);
         }
 
-        // Export configuration as environment variables
+        // Export configuration as TOML
         async function exportConfiguration() {
             try {
-                // Fetch the .env file content from the server
-                const response = await fetch('/admin/api/env-file');
+                const response = await fetch('/admin/api/config-file');
                 if (!response.ok) {
-                    throw new Error('Failed to fetch .env file');
+                    throw new Error('Failed to fetch config.toml');
                 }
 
-                let envContent = await response.text();
-
-                // Replace ADMIN_PASSWORD value with empty string
-                envContent = envContent.replace(/^ADMIN_PASSWORD=.*$/m, 'ADMIN_PASSWORD=');
-
-                // Copy to clipboard
-                await copyToClipboard(envContent, '.env configuration copied to clipboard! Ready to paste.');
+                const tomlContent = await response.text();
+                await copyToClipboard(tomlContent, 'config.toml copied to clipboard! Ready to paste.');
 
             } catch (error) {
                 console.error('Export error:', error);
                 showErrorToast('Failed to export configuration: ' + error.message);
+            }
+        }
+
+        function openConfigImportDialog() {
+            const dialog = document.getElementById('configImportDialog');
+            const textarea = document.getElementById('configImportTextarea');
+            if (!dialog || !textarea) {
+                return;
+            }
+
+            textarea.value = '';
+            dialog.classList.remove('hidden');
+            setTimeout(() => textarea.focus(), 0);
+        }
+
+        function closeConfigImportDialog() {
+            const dialog = document.getElementById('configImportDialog');
+            if (dialog) {
+                dialog.classList.add('hidden');
+            }
+        }
+
+        async function importConfiguration() {
+            const textarea = document.getElementById('configImportTextarea');
+            const button = document.getElementById('importConfigButton');
+            const toml = textarea?.value || '';
+
+            if (!toml.trim()) {
+                showWarningToast('Paste config.toml content before importing.');
+                return;
+            }
+
+            try {
+                if (button) {
+                    button.disabled = true;
+                    button.textContent = 'Importing...';
+                }
+
+                const response = await fetch('/admin/api/config-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ toml })
+                });
+
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(payload?.error?.message || payload?.error || 'Import failed');
+                }
+
+                closeConfigImportDialog();
+                await loadEnvVars();
+                showSuccessToast('config.toml imported and applied successfully.');
+            } catch (error) {
+                showErrorToast(`Failed to import TOML: ${error.message}`);
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = 'Import TOML';
+                }
             }
         }
 
@@ -3980,6 +4069,11 @@ ${googApiKeyHeader}  -H "Content-Type: application/json" \\
                 } else if (e.key === 'Enter') {
                     confirmDelete();
                 }
+            }
+
+            const importDialog = document.getElementById('configImportDialog');
+            if (importDialog && !importDialog.classList.contains('hidden') && e.key === 'Escape') {
+                closeConfigImportDialog();
             }
         });
         

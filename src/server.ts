@@ -695,10 +695,12 @@ export class ProxyServer {
     // Admin API routes
     if (path === '/admin/api/env' && req.method === 'GET') {
       await this.handleGetEnvVars(res);
-    } else if (path === '/admin/api/env-file' && req.method === 'GET') {
-      await this.handleGetEnvFile(res);
+    } else if (path === '/admin/api/config-file' && req.method === 'GET') {
+      await this.handleGetConfigFile(res);
     } else if (path === '/admin/api/env' && req.method === 'POST') {
       await this.handleUpdateEnvVars(res, body);
+    } else if (path === '/admin/api/config-file' && req.method === 'POST') {
+      await this.handleImportConfigFile(res, body);
     } else if (path === '/admin/api/test' && req.method === 'POST') {
       await this.handleTestApiKey(res, body);
     } else if (path === '/admin/api/logs' && req.method === 'GET') {
@@ -803,13 +805,13 @@ export class ProxyServer {
     }
   }
 
-  async handleGetEnvFile(res) {
+  async handleGetConfigFile(res) {
     try {
-      const envContent = this.config.toEnvFileString();
+      const tomlContent = this.config.toTomlFileString();
       res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end(envContent);
+      res.end(tomlContent);
     } catch (error) {
-      this.sendError(res, 500, 'Failed to read .env file');
+      this.sendError(res, 500, 'Failed to read config.toml');
     }
   }
 
@@ -964,6 +966,26 @@ export class ProxyServer {
       res.end(JSON.stringify({ success: true }));
     } catch (error) {
       this.sendError(res, 500, 'Failed to update environment variables');
+    }
+  }
+
+  async handleImportConfigFile(res, body) {
+    try {
+      const payload = JSON.parse(body);
+      const tomlContent = typeof payload?.toml === 'string' ? payload.toml : '';
+
+      if (!tomlContent.trim()) {
+        this.sendError(res, 400, 'TOML content is required');
+        return;
+      }
+
+      this.config.updateFromTomlString(tomlContent);
+      this.reinitializeClients();
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    } catch (error) {
+      this.sendError(res, 400, `Failed to import config.toml: ${error?.message || 'Unknown error'}`);
     }
   }
 
