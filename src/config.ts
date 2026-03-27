@@ -87,12 +87,29 @@ export class Config {
 
   private readConfigFile(): ConfigFile {
     if (!fs.existsSync(this.configPath)) {
-      return {};
+      return this.createDefaultConfigFile();
     }
 
     const content = fs.readFileSync(this.configPath, 'utf8');
     const parsed = TOML.parse(content) as ConfigFile;
     return parsed;
+  }
+
+  private createDefaultConfigFile(): ConfigFile {
+    const envAdminPassword = process.env.ADMIN_PASSWORD?.trim();
+    const defaultConfig: ConfigFile = {
+      server: {
+        port: 8990,
+        adminPassword: envAdminPassword && envAdminPassword.length > 0 ? envAdminPassword : 'admin',
+      },
+      provider: {},
+    };
+    const dirPath = path.dirname(this.configPath);
+    fs.mkdirSync(dirPath, { recursive: true });
+    const text = TOML.stringify(defaultConfig as TOML.JsonMap);
+    fs.writeFileSync(this.configPath, text, 'utf8');
+    console.log(`[CONFIG] Created default config at ${this.configPath}`);
+    return defaultConfig;
   }
 
   private parseProvidersFromConfig(providers: Record<string, ProviderInput>): Map<string, ProviderConfig> {

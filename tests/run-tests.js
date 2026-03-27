@@ -130,6 +130,30 @@ await run('Config imports TOML and preserves password when redacted', async () =
   fs.rmdirSync(tempDir);
 });
 
+await run('Config auto-creates default config file when missing', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oh-my-ai-default-'));
+  const tempConfigPath = path.join(tempDir, 'nested', 'config.toml');
+
+  process.env.CONFIG_FILE = tempConfigPath;
+  delete process.env.ADMIN_PASSWORD;
+  delete process.env.PORT;
+
+  const config = new Config();
+
+  assert.equal(fs.existsSync(tempConfigPath), true);
+  assert.equal(config.adminPassword, 'admin');
+  assert.equal(config.port, 8990);
+
+  const content = fs.readFileSync(tempConfigPath, 'utf8');
+  assert.match(content, /\[server\]/);
+  assert.match(content, /adminPassword = "admin"/);
+  assert.match(content, /port = (8990|8_990)/);
+
+  cleanupFile(tempConfigPath);
+  fs.rmdirSync(path.dirname(tempConfigPath));
+  fs.rmdirSync(tempDir);
+});
+
 await run('ProxyServer metrics payload includes timeline and provider health', async () => {
   const server = new ProxyServer({ getAdminPassword: () => 'test-admin' });
   const now = new Date();
