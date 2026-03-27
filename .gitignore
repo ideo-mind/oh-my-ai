@@ -8,3 +8,4 @@ bun.lockb
 .bun-tmp
 .bun-install
 config.toml
+.npmrc
