@@ -105,4 +105,4 @@ This approach helps avoid duplicate efforts and ensures smooth collaboration. Th
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under GNU GPL v3.0 (or later) - see the [LICENSE](LICENSE) file for details.
