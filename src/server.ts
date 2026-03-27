@@ -1,5 +1,4 @@
 import * as http from 'node:http';
-import { URL } from 'node:url';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
@@ -64,7 +63,7 @@ export class ProxyServer {
   }
 
   async handleRequest(req, res) {
-    const requestId = Math.random().toString(36).substring(2, 11);
+    const requestId = this.generateRequestId();
     const clientIp = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
     const startTime = Date.now();
 
@@ -91,28 +90,28 @@ export class ProxyServer {
       // Serve static files from public directory
       if (req.url === '/tailwind-3.4.17.js' && (req.method === 'GET' || req.method === 'HEAD')) {
         try {
-          const filePath = path.join(process.cwd(), 'public', 'tailwind-3.4.17.js');
+          const filePath = this.resolvePublicFilePath('tailwind-3.4.17.js');
           console.log(`[STATIC] Serving file from: ${filePath}`);
 
+          const fileData = await this.readTextFileWithSize(filePath);
+          if (!fileData) {
+            throw new Error('File not found');
+          }
+
+          const headers = {
+            'Content-Type': 'application/javascript',
+            'Content-Length': fileData.size,
+            'Cache-Control': 'public, max-age=31536000'
+          };
+
+          res.writeHead(200, headers);
+
           if (req.method === 'HEAD') {
-            // For HEAD requests, just send headers without body
-            const stats = fs.statSync(filePath);
-            res.writeHead(200, {
-              'Content-Type': 'application/javascript',
-              'Content-Length': stats.size,
-              'Cache-Control': 'public, max-age=31536000' // Cache for 1 year
-            });
             res.end();
           } else {
-            // For GET requests, send the file content
-            const fileContent = fs.readFileSync(filePath, 'utf8');
-            res.writeHead(200, {
-              'Content-Type': 'application/javascript',
-              'Content-Length': Buffer.byteLength(fileContent),
-              'Cache-Control': 'public, max-age=31536000' // Cache for 1 year
-            });
-            res.end(fileContent);
+            res.end(fileData.content);
           }
+
           console.log(`[STATIC] Successfully served: ${req.url}`);
           return;
         } catch (error) {
@@ -622,7 +621,7 @@ export class ProxyServer {
 
     // Serve main admin page
     if (path === '/admin' || path === '/admin/') {
-      this.serveAdminPanel(res);
+      await this.serveAdminPanel(res);
       return;
     }
 
@@ -1665,12 +1664,57 @@ export class ProxyServer {
     }
   }
 
-  serveAdminPanel(res) {
+  isBunRuntime() {
+    return typeof Bun !== 'undefined' && typeof Bun.file === 'function';
+  }
+
+  generateRequestId() {
+    if (this.isBunRuntime() && typeof Bun.randomUUID === 'function') {
+      return Bun.randomUUID().slice(0, 8);
+    }
+
+    return Math.random().toString(36).substring(2, 11);
+  }
+
+  resolvePublicFilePath(fileName) {
+    return path.join(process.cwd(), 'public', fileName);
+  }
+
+  async readTextFileWithSize(filePath) {
+    if (this.isBunRuntime()) {
+      const bunFile = Bun.file(filePath);
+      if (!(await bunFile.exists())) {
+        return null;
+      }
+
+      const content = await bunFile.text();
+      return {
+        content,
+        size: Buffer.byteLength(content)
+      };
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+
+    const content = fs.readFileSync(filePath, 'utf8');
+    return {
+      content,
+      size: Buffer.byteLength(content)
+    };
+  }
+
+  async serveAdminPanel(res) {
     try {
-      const htmlPath = path.join(process.cwd(), 'public', 'admin.html');
-      const html = fs.readFileSync(htmlPath, 'utf8');
+      const htmlPath = this.resolvePublicFilePath('admin.html');
+      const htmlData = await this.readTextFileWithSize(htmlPath);
+      if (!htmlData) {
+        throw new Error('Admin panel not found');
+      }
+
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(html);
+      res.end(htmlData.content);
     } catch (error) {
       this.sendError(res, 500, 'Admin panel not found');
     }
