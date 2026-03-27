@@ -29,7 +29,7 @@
   ],
   "author": "Hiro <laciferin@gmail.com>",
   "license": "GPL-3.0-or-later",
-  "description": "API proxy server with automatic key rotation for OpenAI- and Gemini-compatible LLM providers.",
+  "description": "Bun-native LLM proxy runner with automatic key rotation and a live admin panel.",
   "engines": {
     "bun": ">=1.0.0"
   },
