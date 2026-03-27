@@ -1,0 +1,21 @@
+{
+  "name": "godai",
+  "version": "4.0.1",
+  "main": "index.ts",
+  "scripts": {
+    "start": "bun run index.ts",
+    "build": "bun build index.ts --outdir .bun-build --target=bun",
+    "test": "bun run tests/run-tests.js",
+    "test:gemini": "bun run tests/test-gemini.js",
+    "test:openai": "bun run tests/test-openai.js",
+    "dev": "bun --watch run index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@iarna/toml": "^2.2.5",
+    "@types/bun": "^1.3.11"
+  }
+}

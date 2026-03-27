@@ -1,0 +1,10 @@
+.env
+/node_modules
+/.claude
+*.log
+/.serena
+bun.lockb
+.bun-build
+.bun-tmp
+.bun-install
+config.toml
