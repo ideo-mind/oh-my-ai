@@ -21,8 +21,8 @@ RUN mkdir -p /config
 
 # COPY --from=builder /app/config.toml /config/config.toml
 
-EXPOSE 8990
-ENV PORT=8990
+EXPOSE 80
+ENV PORT=80
 ENV NODE_ENV=production
 ENV CONFIG_FILE=/config/config.toml
 
