@@ -7,7 +7,7 @@ on:
 
 env:
   PROJECT_ID: waahi-2026
-  REGION: asia-south1
+  REGION: us-central1
   SERVICE_NAME: oh-my-ai
   REPOSITORY: cloudrun-repo
 
