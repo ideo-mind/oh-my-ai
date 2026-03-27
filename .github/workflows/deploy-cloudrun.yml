@@ -78,9 +78,11 @@ jobs:
             --platform managed \
             --region ${{ env.REGION }} \
             --allow-unauthenticated \
-            --port 8990 \
-            --set-env-vars="PORT=8990"
+            --timeout 3600 \
+            --port 80
             # --memory 512Mi \
             # --cpu 1 \
-            # --min-instances 0 \
+            # --min-instances 1 \
             # --max-instances 10 \
+            # --concurrency 80 \
+            # --timeout 120 \
