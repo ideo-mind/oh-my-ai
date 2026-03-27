@@ -46,7 +46,7 @@ jobs:
           # base for tags
           images: |
             ${{ env.REGISTRY }}/${{github.repository}}
-            ${{ env.REGISTRY }}/${{github.repository_owner}}
+            ${{ env.REGISTRY }}/${{github.repository_owner}}/oma
 
           tags: |
             type=schedule
