@@ -16,7 +16,7 @@
     "version-packages": "changeset version",
     "release:changeset": "changeset publish",
     "release:npm": "bun run release:changeset",
-    "release": "./scripts/release.sh"
+    "release": "sh ./scripts/release.sh"
   },
   "keywords": [
     "bun",
