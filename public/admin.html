@@ -890,8 +890,12 @@
             const nextEnvVars = {};
             for (const provider of payload?.providers || []) {
                 const prefix = `${provider.apiType.toUpperCase()}_${provider.name.toUpperCase()}`;
-                const keyValues = (provider.apiKeysDetailed || []).map(key => key.value).filter(Boolean);
-                nextEnvVars[`${prefix}_API_KEYS`] = (keyValues.length > 0 ? keyValues : (provider.apiKeys || [])).join(',');
+                const allDetailedKeys = (provider.apiKeysDetailed || []).filter(key => key?.value).map(key => ({
+                    value: key.value,
+                    active: key.active !== false
+                }));
+                const activeKeys = allDetailedKeys.filter(key => key.active).map(key => key.value);
+                nextEnvVars[`${prefix}_API_KEYS`] = (allDetailedKeys.length > 0 ? activeKeys : (provider.apiKeys || [])).join(',');
                 if (provider.baseUrl) nextEnvVars[`${prefix}_BASE_URL`] = provider.baseUrl;
                 if (provider.accessKey) nextEnvVars[`${prefix}_ACCESS_KEY`] = provider.accessKey;
                 if (provider.defaultModel) nextEnvVars[`${prefix}_DEFAULT_MODEL`] = provider.defaultModel;
@@ -924,9 +928,10 @@
             provider.apiKeysDetailed = apiKeysDetailed.map(detail => ({
                 value: detail.value,
                 label: detail.label || null,
-                tier: detail.tier || null
+                tier: detail.tier || null,
+                active: detail.active !== false
             }));
-            provider.apiKeys = provider.apiKeysDetailed.map(detail => detail.value);
+            provider.apiKeys = provider.apiKeysDetailed.filter(detail => detail.active !== false).map(detail => detail.value);
         }
 
         function removeStoredKeyDetail(apiType, providerName, apiKey) {
@@ -973,6 +978,28 @@
                             };
                         }
                         providers[providerKey].keys = value.split(',').map(k => k.trim()).filter(k => k);
+                    }
+                } else if (key.endsWith('_API_KEYS')) {
+                    const keyWithoutSuffix = key.replace('_API_KEYS', '');
+                    const firstUnderscoreIndex = keyWithoutSuffix.indexOf('_');
+
+                    if (firstUnderscoreIndex > 0) {
+                        const apiType = keyWithoutSuffix.substring(0, firstUnderscoreIndex).toLowerCase();
+                        const providerName = keyWithoutSuffix.substring(firstUnderscoreIndex + 1).toLowerCase();
+                        const providerKey = `${apiType}_${providerName}`;
+
+                        if (!providers[providerKey]) {
+                            providers[providerKey] = {
+                                name: providerName,
+                                apiType: apiType,
+                                keys: [],
+                                baseUrl: '',
+                                accessKey: '',
+                                defaultModel: '',
+                                modelHistory: []
+                            };
+                        }
+                        providers[providerKey].keys = [];
                     }
                 } else if (key.endsWith('_BASE_URL') && value) {
                     const match = key.match(/^(.+)_(.+)_BASE_URL$/);
@@ -1065,12 +1092,25 @@
                 }
 
                 const detailsMap = getStoredKeyDetails(provider.apiType, provider.name);
+                const detailList = Array.from(detailsMap.values());
+                if (detailList.length > 0) {
+                    provider.keyDetails = detailList.map(detail => ({
+                        value: detail.value,
+                        label: detail?.label || '',
+                        tier: detail?.tier || '',
+                        active: detail?.active !== false
+                    }));
+                    provider.keys = provider.keyDetails.filter(detail => detail.active !== false).map(detail => detail.value);
+                    return;
+                }
+
                 provider.keyDetails = provider.keys.map(key => {
                     const detail = detailsMap.get(key);
                     return {
                         value: key,
                         label: detail?.label || '',
-                        tier: detail?.tier || ''
+                        tier: detail?.tier || '',
+                        active: detail?.active !== false
                     };
                 });
             });
@@ -1083,12 +1123,12 @@
                 name: provider.name,
                 apiType: provider.apiType,
                 apiKeys: provider.keys,
-                apiKeysDetailed: provider.keys.map(key => {
-                    const detail = getStoredKeyDetails(provider.apiType, provider.name).get(key);
+                apiKeysDetailed: (provider.keyDetails || provider.keys.map(key => ({ value: key, label: null, tier: null, active: true }))).map(detail => {
                     return {
-                        value: key,
+                        value: detail.value,
                         label: detail?.label || null,
-                        tier: detail?.tier || null
+                        tier: detail?.tier || null,
+                        active: detail?.active !== false
                     };
                 }),
                 baseUrl: provider.baseUrl || undefined,
@@ -1128,6 +1168,14 @@
             return `<span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${classes}">Tier ${escapeHtml(tier)}</span>`;
         }
 
+        function getKeyStatusBadgeHtml(active) {
+            if (active === false) {
+                return '<span class="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">Deactivated</span>';
+            }
+
+            return '<span class="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300">Active</span>';
+        }
+
         let draggingProviderKey = null;
 
         function handleProviderKeyDragStart(apiType, providerName, keyValue) {
@@ -1150,30 +1198,21 @@
             if (draggingProviderKey.keyValue === targetKeyValue) return;
 
             const keysVar = `${apiType.toUpperCase()}_${providerName.toUpperCase()}_API_KEYS`;
-            const existingKeys = envVars[keysVar] ? envVars[keysVar].split(',').map(key => key.trim()).filter(Boolean) : [];
-            const fromIndex = existingKeys.indexOf(draggingProviderKey.keyValue);
-            const toIndex = existingKeys.indexOf(targetKeyValue);
+            const existingDetails = Array.from(getStoredKeyDetails(apiType, providerName).values());
+            const fromIndex = existingDetails.findIndex(detail => detail.value === draggingProviderKey.keyValue);
+            const toIndex = existingDetails.findIndex(detail => detail.value === targetKeyValue);
 
             if (fromIndex === -1 || toIndex === -1) {
                 draggingProviderKey = null;
                 return;
             }
 
-            const reorderedKeys = [...existingKeys];
-            const [movedKey] = reorderedKeys.splice(fromIndex, 1);
-            reorderedKeys.splice(toIndex, 0, movedKey);
+            const reorderedDetails = [...existingDetails];
+            const [movedDetail] = reorderedDetails.splice(fromIndex, 1);
+            reorderedDetails.splice(toIndex, 0, movedDetail);
             const previousValue = envVars[keysVar] || '';
-            envVars[keysVar] = reorderedKeys.join(',');
-
-            const detailsMap = getStoredKeyDetails(apiType, providerName);
-            setStoredKeyDetails(apiType, providerName, reorderedKeys.map(key => {
-                const detail = detailsMap.get(key);
-                return {
-                    value: key,
-                    label: detail?.label || null,
-                    tier: detail?.tier || null
-                };
-            }));
+            envVars[keysVar] = reorderedDetails.filter(detail => detail.active !== false).map(detail => detail.value).join(',');
+            setStoredKeyDetails(apiType, providerName, reorderedDetails);
 
             try {
                 const response = await fetch('/admin/api/env', {
@@ -1192,14 +1231,7 @@
                 showSuccessToast(`Updated API key order for '${providerName}'`);
             } catch (error) {
                 envVars[keysVar] = previousValue;
-                setStoredKeyDetails(apiType, providerName, existingKeys.map(key => {
-                    const detail = detailsMap.get(key);
-                    return {
-                        value: key,
-                        label: detail?.label || null,
-                        tier: detail?.tier || null
-                    };
-                }));
+                setStoredKeyDetails(apiType, providerName, existingDetails);
                 showErrorToast(`Failed to reorder API keys: ${error.message}`);
             } finally {
                 draggingProviderKey = null;
@@ -1746,6 +1778,7 @@
                                             <div class="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-muted-foreground">
                                                 <span>${keyDetail.label ? `Label: ${escapeHtml(keyDetail.label)}` : 'No label'}</span>
                                                 ${getTierBadgeHtml(keyDetail.tier)}
+                                                ${getKeyStatusBadgeHtml(keyDetail.active)}
                                             </div>
                                         </div>
                                         <button 
@@ -1755,11 +1788,24 @@
                                             Test
                                         </button>
                                         <button 
+                                            onclick="toggleProviderKeyActive('${provider.apiType}', '${provider.name}', ${keyIndex})" 
+                                            class="btn ${keyDetail.active === false ? 'btn-success' : 'btn-warning'} px-2 py-1"
+                                            title="${keyDetail.active === false ? 'Activate Key' : 'Deactivate Key'}"
+                                        >
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                                ${keyDetail.active === false
+                                                    ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>'
+                                                    : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path>'}
+                                            </svg>
+                                        </button>
+                                        <button 
                                             onclick="showDeleteKeyConfirmation('${provider.apiType}', '${provider.name}', ${keyIndex})" 
-                                            class="btn btn-destructive px-2 py-1 text-xs font-medium"
+                                            class="btn btn-destructive px-2 py-1"
                                             title="Delete Key"
                                         >
-                                            Delete
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                            </svg>
                                         </button>
                                     </div>
                                 `).join('')}
@@ -3114,28 +3160,31 @@ ${googApiKeyHeader}  -H "Content-Type: application/json" \\
         }
 
         async function deleteProviderKey(apiType, providerName, keyIndex) {
-
             const keysVar = `${apiType.toUpperCase()}_${providerName.toUpperCase()}_API_KEYS`;
-            const keys = envVars[keysVar] ? envVars[keysVar].split(',') : [];
-            const removedKey = keys[keyIndex];
+            const existingDetails = Array.from(getStoredKeyDetails(apiType, providerName).values());
+            const targetDetail = existingDetails[keyIndex];
 
-            keys.splice(keyIndex, 1);
+            if (!targetDetail) {
+                showErrorToast('API key not found');
+                return;
+            }
 
-            if (keys.length === 0) {
-                // If no keys left, delete the entire provider using the same logic as deleteProvider
+            const nextDetails = existingDetails.filter((_, index) => index !== keyIndex);
+            const activeKeys = nextDetails.filter(detail => detail.active !== false).map(detail => detail.value);
+
+            if (nextDetails.length === 0) {
+                // If no keys left at all, delete the entire provider
                 const providerPrefix = `${apiType.toUpperCase()}_${providerName.toUpperCase()}_`;
 
-                // Delete all environment variables that start with the provider prefix
                 for (const key in envVars) {
                     if (key.startsWith(providerPrefix)) {
-                        console.log(`Deleting env var: ${key}`);
                         delete envVars[key];
                     }
                 }
                 removeStoredProvider(apiType, providerName);
             } else {
-                envVars[keysVar] = keys.filter(k => k.trim()).join(',');
-                removeStoredKeyDetail(apiType, providerName, removedKey);
+                envVars[keysVar] = activeKeys.join(',');
+                setStoredKeyDetails(apiType, providerName, nextDetails);
             }
 
             try {
@@ -3151,10 +3200,63 @@ ${googApiKeyHeader}  -H "Content-Type: application/json" \\
                 document.getElementById('realContent').classList.remove('hidden');
                     showSuccessToast(`🗑️ API key deleted from provider '${providerName}'`);
                 } else {
+                    setStoredKeyDetails(apiType, providerName, existingDetails);
                     showErrorToast('Failed to delete API key');
                 }
             } catch (error) {
+                setStoredKeyDetails(apiType, providerName, existingDetails);
                 showErrorToast(`Failed to delete API key: ${error.message}`);
+            }
+        }
+
+        async function toggleProviderKeyActive(apiType, providerName, keyIndex) {
+            const keysVar = `${apiType.toUpperCase()}_${providerName.toUpperCase()}_API_KEYS`;
+            const existingDetails = Array.from(getStoredKeyDetails(apiType, providerName).values());
+            const targetDetail = existingDetails[keyIndex];
+
+            if (!targetDetail) {
+                showErrorToast('API key not found');
+                return;
+            }
+
+            const nextActive = targetDetail.active === false;
+            const updatedDetails = existingDetails.map((detail, index) => {
+                if (index !== keyIndex) {
+                    return detail;
+                }
+
+                return {
+                    value: detail.value,
+                    label: detail.label || null,
+                    tier: detail.tier || null,
+                    active: nextActive
+                };
+            });
+
+            envVars[keysVar] = updatedDetails.filter(detail => detail.active !== false).map(detail => detail.value).join(',');
+            setStoredKeyDetails(apiType, providerName, updatedDetails);
+
+            try {
+                const response = await fetch('/admin/api/env', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(envVarsToAdminPayload())
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to update key status');
+                }
+
+                renderEnvVars();
+                document.getElementById('skeletonLoader').classList.add('hidden');
+                document.getElementById('realContent').classList.remove('hidden');
+                showSuccessToast(nextActive
+                    ? `✅ API key activated for provider '${providerName}'`
+                    : `⏸️ API key deactivated for provider '${providerName}'`);
+            } catch (error) {
+                envVars[keysVar] = existingDetails.filter(detail => detail.active !== false).map(detail => detail.value).join(',');
+                setStoredKeyDetails(apiType, providerName, existingDetails);
+                showErrorToast(`Failed to update API key status: ${error.message}`);
             }
         }
         
@@ -3215,7 +3317,7 @@ ${googApiKeyHeader}  -H "Content-Type: application/json" \\
             existingKeys.push(newKey);
             envVars[keysVar] = existingKeys.filter(k => k.trim()).join(',');
             const existingDetails = Array.from(getStoredKeyDetails(apiType, providerName).values()).filter(detail => detail.value !== newKey);
-            existingDetails.push({ value: newKey, label: newLabel || null, tier: newTier || null });
+            existingDetails.push({ value: newKey, label: newLabel || null, tier: newTier || null, active: true });
             setStoredKeyDetails(apiType, providerName, existingDetails);
             
             try {

@@ -6,6 +6,7 @@ export type ApiKeyConfig = {
   value: string;
   label?: string | null;
   tier?: string | null;
+  active?: boolean;
 };
 
 export type ProviderConfig = {
@@ -124,13 +125,14 @@ export class Config {
               value: key.value.trim(),
               label: key.label?.trim() || null,
               tier: key.tier?.trim() || null,
+              active: key.active !== false,
             }))
         : (cfg.apiKeys ?? [])
             .filter(key => typeof key === 'string' && key.trim().length > 0)
-            .map(key => ({ value: key.trim(), label: null, tier: null }));
-      const apiKeys = apiKeysDetailed.map(key => key.value);
+            .map(key => ({ value: key.trim(), label: null, tier: null, active: true }));
+      const apiKeys = apiKeysDetailed.filter(key => key.active !== false).map(key => key.value);
 
-      if (!apiType || apiKeys.length === 0) {
+      if (!apiType || (apiKeys.length === 0 && apiKeysDetailed.length === 0)) {
         continue;
       }
 
@@ -407,8 +409,21 @@ export class Config {
 
       providers[provider.name.toLowerCase()] = {
         apiType: provider.apiType.toLowerCase(),
-        apiKeys: [...(provider.apiKeysDetailed?.map(key => key.value) ?? provider.apiKeys ?? [])],
-        apiKeysDetailed: [...(provider.apiKeysDetailed ?? (provider.apiKeys ?? []).map(key => ({ value: key, label: null, tier: null })))],
+        apiKeys: [
+          ...(
+            provider.apiKeysDetailed
+              ?.filter(key => key.active !== false)
+              .map(key => key.value)
+            ?? provider.apiKeys
+            ?? []
+          )
+        ],
+        apiKeysDetailed: [
+          ...(
+            provider.apiKeysDetailed
+            ?? (provider.apiKeys ?? []).map(key => ({ value: key, label: null, tier: null, active: true }))
+          )
+        ],
         baseUrl: provider.baseUrl,
         accessKey: provider.accessKey ?? null,
         defaultModel: provider.defaultModel ?? null,
