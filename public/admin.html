@@ -2456,16 +2456,34 @@ ${googApiKeyHeader}  -H "Content-Type: application/json" \\
             }
         }
 
-        function openConfigImportDialog() {
+        async function openConfigImportDialog() {
             const dialog = document.getElementById('configImportDialog');
             const textarea = document.getElementById('configImportTextarea');
             if (!dialog || !textarea) {
                 return;
             }
 
-            textarea.value = '';
+            textarea.value = 'Loading current configuration...';
+            textarea.disabled = true;
             dialog.classList.remove('hidden');
-            setTimeout(() => textarea.focus(), 0);
+
+            try {
+                const response = await fetch('/admin/api/config-file');
+                if (response.ok) {
+                    const tomlContent = await response.text();
+                    textarea.value = tomlContent;
+                } else {
+                    textarea.value = '';
+                    showErrorToast('Failed to load current configuration.');
+                }
+            } catch (error) {
+                console.error('Error fetching config:', error);
+                textarea.value = '';
+                showErrorToast('Error loading current configuration.');
+            } finally {
+                textarea.disabled = false;
+                setTimeout(() => textarea.focus(), 0);
+            }
         }
 
         function closeConfigImportDialog() {
