@@ -351,9 +351,9 @@ export class ProxyServer {
       let client: any;
 
       if (provider.apiType === 'openai') {
-        client = new OpenAIClient(keyRotator, provider.baseUrl);
+        client = new OpenAIClient(keyRotator, provider.baseUrl, provider.burstSize);
       } else if (provider.apiType === 'gemini') {
-        client = new GeminiClient(keyRotator, provider.baseUrl);
+        client = new GeminiClient(keyRotator, provider.baseUrl, provider.burstSize);
       } else {
         return null;
       }

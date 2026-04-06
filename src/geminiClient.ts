@@ -3,9 +3,10 @@ import * as crypto from 'node:crypto';
 import { URL } from 'node:url';
 
 export class GeminiClient {
-  constructor(keyRotator, baseUrl = 'https://generativelanguage.googleapis.com') {
+  constructor(keyRotator, baseUrl = 'https://generativelanguage.googleapis.com', burstSize = 1) {
     this.keyRotator = keyRotator;
     this.baseUrl = baseUrl;
+    this.burstSize = burstSize;
   }
 
   async makeRequest(method, path, body, headers = {}, customStatusCodes = null) {
@@ -41,30 +42,66 @@ export class GeminiClient {
     // Default is just 429, but can be overridden
     const rotationStatusCodes = customStatusCodes || new Set([429]);
 
-    // Try each available key for this request
-    let apiKey;
-    while ((apiKey = requestContext.getNextKey()) !== null) {
-      const maskedKey = this.maskApiKey(apiKey);
+    while (true) {
+      const batch = requestContext.getNextBatch(this.burstSize);
+      if (batch.length === 0) {
+        break;
+      }
 
-      console.log(`[GEMINI::${maskedKey}] try ${method} ${path}`);
+      const abortController = new AbortController();
 
-      try {
-        const response = await this.sendRequest(method, path, body, headers, apiKey, false);
+      const results = await Promise.allSettled(batch.map(async (apiKey) => {
+        const maskedKey = this.maskApiKey(apiKey);
+        console.log(`[GEMINI::${maskedKey}] try ${method} ${path}${batch.length > 1 ? ` (Burst: ${batch.length})` : ''}`);
 
-        // Check if this status code should trigger rotation
-        if (rotationStatusCodes.has(response.statusCode)) {
-          requestContext.markKeyAsRateLimited(apiKey, response.statusCode);
-          lastResponse = response; // Keep the response in case all keys fail
-          continue;
+        try {
+          const response = await this.sendRequest(method, path, body, headers, apiKey, false, abortController.signal);
+
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            abortController.abort();
+            return { type: 'success', response, apiKey };
+          }
+
+          if (rotationStatusCodes.has(response.statusCode)) {
+            requestContext.markKeyAsRateLimited(apiKey, response.statusCode);
+            return { type: 'retryable', response, apiKey };
+          }
+
+          return { type: 'hard_error', response, apiKey };
+        } catch (error) {
+          if (error.name === 'AbortError') {
+            return { type: 'aborted' };
+          }
+          console.error(`[GEMINI::${maskedKey}] fail ${error.message}`);
+          return { type: 'error', error, apiKey };
         }
+      }));
 
+      const successResult = results.find(r => r.status === 'fulfilled' && r.value.type === 'success');
+      if (successResult) {
+        const { response, apiKey } = successResult.value;
+        const maskedKey = this.maskApiKey(apiKey);
         console.log(`[GEMINI::${maskedKey}] ok ${response.statusCode}`);
         return this.attachResponseMeta(response, apiKey, 'rotation');
-      } catch (error) {
-        console.error(`[GEMINI::${maskedKey}] fail ${error.message}`);
-        lastError = error;
-        // For network errors, we still try the next key
-        continue;
+      }
+
+      const hardErrorResult = results.find(r => r.status === 'fulfilled' && r.value.type === 'hard_error');
+      if (hardErrorResult) {
+        const { response, apiKey } = hardErrorResult.value;
+        const maskedKey = this.maskApiKey(apiKey);
+        console.log(`[GEMINI::${maskedKey}] fail ${response.statusCode} (terminal)`);
+        return this.attachResponseMeta(response, apiKey, 'rotation');
+      }
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          const val = result.value;
+          if (val.type === 'retryable') {
+            lastResponse = val.response;
+          } else if (val.type === 'error') {
+            lastError = val.error;
+          }
+        }
       }
     }
 
@@ -115,7 +152,7 @@ export class GeminiClient {
     return response;
   }
 
-  sendRequest(method, path, body, headers, apiKey, useHeader = false) {
+  sendRequest(method, path, body, headers, apiKey, useHeader = false, signal = null) {
     return new Promise((resolve, reject) => {
       const normalizedBody = this.normalizeRequestBodyForProvider(path, body);
 
@@ -168,7 +205,8 @@ export class GeminiClient {
         port: url.port || 443,
         path: url.pathname + url.search,
         method: method,
-        headers: finalHeaders
+        headers: finalHeaders,
+        signal: signal
       };
 
       if (normalizedBody && method !== 'GET') {
