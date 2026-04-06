@@ -59,6 +59,36 @@ await run('Config writes admin updates to CONFIG_FILE target', async () => {
   fs.rmdirSync(tempDir);
 });
 
+await run('Config persists burstSize to CONFIG_FILE', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oh-my-ai-burst-'));
+  const tempConfigPath = path.join(tempDir, 'config.toml');
+
+  process.env.CONFIG_FILE = tempConfigPath;
+  process.env.ADMIN_PASSWORD = 'test-admin';
+  delete process.env.PORT;
+
+  const config = new Config();
+  config.updateFromAdminPayload({
+    providers: [{
+      name: 'burst-test',
+      apiType: 'openai',
+      apiKeys: ['sk-burst'],
+      burstSize: 3
+    }]
+  });
+
+  assert.equal(fs.existsSync(tempConfigPath), true);
+  const content = fs.readFileSync(tempConfigPath, 'utf8');
+  assert.match(content, /burstSize = 3/);
+
+  const reloadedConfig = new Config(tempConfigPath);
+  const provider = reloadedConfig.getProvider('burst-test');
+  assert.equal(provider?.burstSize, 3);
+
+  cleanupFile(tempConfigPath);
+  fs.rmdirSync(tempDir);
+});
+
 await run('Config exports TOML with redacted admin password', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oh-my-ai-toml-'));
   const tempConfigPath = path.join(tempDir, 'config.toml');
