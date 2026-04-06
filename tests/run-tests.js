@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Config } from '../src/config.ts';
 import { ProxyServer } from '../src/server.ts';
+import { KeyRotator } from '../src/keyRotator.ts';
 
 const originalConfigFile = process.env.CONFIG_FILE;
 const originalAdminPassword = process.env.ADMIN_PASSWORD;
@@ -218,6 +219,60 @@ await run('ProxyServer metrics payload includes timeline and provider health', a
   assert.ok(Array.isArray(payload.timeline));
   assert.ok(payload.timeline.length >= 1);
   assert.equal(payload.providers.openai.keys['key-a'].totalRequests, 2);
+});
+
+await run('KeyRotator getNextBatch and smart shuffle', async () => {
+  const keys = ['key1', 'key2', 'key3', 'key4', 'key5'];
+  const rotator = new KeyRotator(keys, 'test');
+
+  const context1 = rotator.createRequestContext();
+  const batch1 = context1.getNextBatch(2);
+  assert.equal(batch1.length, 2);
+  assert.ok(keys.includes(batch1[0]));
+  assert.ok(keys.includes(batch1[1]));
+  assert.notEqual(batch1[0], batch1[1]);
+
+  const batch2 = context1.getNextBatch(2);
+  assert.equal(batch2.length, 2);
+  for (const k of batch2) {
+    assert.ok(keys.includes(k));
+    assert.ok(!batch1.includes(k));
+  }
+
+  const batch3 = context1.getNextBatch(2);
+  assert.equal(batch3.length, 1);
+  assert.ok(keys.includes(batch3[0]));
+  assert.ok(!batch1.includes(batch3[0]));
+  assert.ok(!batch2.includes(batch3[0]));
+
+  const batch4 = context1.getNextBatch(2);
+  assert.equal(batch4.length, 0);
+
+  const context2 = rotator.createRequestContext();
+  const batchAll = context2.getNextBatch(10);
+  assert.equal(batchAll.length, 5);
+
+  const lastFailedKey = 'key3';
+  rotator.updateLastFailedKey(lastFailedKey);
+  
+  for (let i = 0; i < 10; i++) {
+    const context3 = rotator.createRequestContext();
+    const allKeys = context3.getNextBatch(5);
+    assert.equal(allKeys.length, 5);
+    assert.equal(allKeys[4], lastFailedKey, `Failed key ${lastFailedKey} should be at the end of batch`);
+    
+    const sortedOriginal = [...keys].sort();
+    const sortedCurrent = [...allKeys].sort();
+    assert.deepEqual(sortedCurrent, sortedOriginal, 'Batch should contain all original keys');
+  }
+
+  rotator.updateLastFailedKey('non-existent-key');
+  const context4 = rotator.createRequestContext();
+  const allKeys4 = context4.getNextBatch(5);
+  assert.equal(allKeys4.length, 5);
+  const sortedOriginal4 = [...keys].sort();
+  const sortedCurrent4 = [...allKeys4].sort();
+  assert.deepEqual(sortedCurrent4, sortedOriginal4);
 });
 
 if (originalConfigFile === undefined) {
