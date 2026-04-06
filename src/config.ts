@@ -35,6 +35,7 @@ type ConfigFile = {
   server?: {
     port?: number;
     adminPassword?: string;
+    logFile?: string;
     logFilePath?: string;
   };
   provider?: Record<string, ProviderInput>;
@@ -78,7 +79,7 @@ export class Config {
     }
 
     this.adminPassword = adminPassword;
-    this.logFilePath = this.rawConfig.server?.logFilePath ?? null;
+    this.logFilePath = this.rawConfig.server?.logFile ?? this.rawConfig.server?.logFilePath ?? null;
 
     this.providers = this.parseProvidersFromConfig(this.rawConfig.provider ?? {});
 
@@ -121,16 +122,16 @@ export class Config {
       const apiType = cfg.apiType?.toLowerCase();
       const apiKeysDetailed = Array.isArray(cfg.apiKeysDetailed)
         ? cfg.apiKeysDetailed
-            .filter(key => typeof key?.value === 'string' && key.value.trim().length > 0)
-            .map(key => ({
-              value: key.value.trim(),
-              label: key.label?.trim() || null,
-              tier: key.tier?.trim() || null,
-              active: key.active !== false,
-            }))
+          .filter(key => typeof key?.value === 'string' && key.value.trim().length > 0)
+          .map(key => ({
+            value: key.value.trim(),
+            label: key.label?.trim() || null,
+            tier: key.tier?.trim() || null,
+            active: key.active !== false,
+          }))
         : (cfg.apiKeys ?? [])
-            .filter(key => typeof key === 'string' && key.trim().length > 0)
-            .map(key => ({ value: key.trim(), label: null, tier: null, active: true }));
+          .filter(key => typeof key === 'string' && key.trim().length > 0)
+          .map(key => ({ value: key.trim(), label: null, tier: null, active: true }));
       const apiKeys = apiKeysDetailed.filter(key => key.active !== false).map(key => key.value);
 
       if (!apiType || (apiKeys.length === 0 && apiKeysDetailed.length === 0)) {
@@ -367,7 +368,7 @@ export class Config {
       const providerName = providerRaw.toLowerCase();
 
       if (!providers[providerName]) {
-      providers[providerName] = { apiType, apiKeys: [] };
+        providers[providerName] = { apiType, apiKeys: [] };
       }
 
       const target = providers[providerName];
@@ -394,6 +395,7 @@ export class Config {
       server: {
         adminPassword: envVars.ADMIN_PASSWORD ?? this.adminPassword,
         port: this.rawConfig.server?.port,
+        logFile: this.rawConfig.server?.logFile,
         logFilePath: this.rawConfig.server?.logFilePath,
       },
       provider: providers,
@@ -441,6 +443,7 @@ export class Config {
       server: {
         adminPassword: this.adminPassword,
         port: this.rawConfig.server?.port,
+        logFile: this.rawConfig.server?.logFile,
         logFilePath: this.rawConfig.server?.logFilePath,
       },
       provider: providers,
@@ -474,13 +477,13 @@ export class Config {
   private writeConfigFile(config: ConfigFile, replace = false) {
     const merged: ConfigFile = replace
       ? {
-          server: { ...(config.server ?? {}) },
-          provider: { ...(config.provider ?? {}) },
-        }
+        server: { ...(config.server ?? {}) },
+        provider: { ...(config.provider ?? {}) },
+      }
       : {
-          server: { ...(this.rawConfig.server ?? {}), ...(config.server ?? {}) },
-          provider: { ...(this.rawConfig.provider ?? {}), ...(config.provider ?? {}) },
-        };
+        server: { ...(this.rawConfig.server ?? {}), ...(config.server ?? {}) },
+        provider: { ...(this.rawConfig.provider ?? {}), ...(config.provider ?? {}) },
+      };
 
     const text = TOML.stringify(merged as TOML.JsonMap);
     fs.writeFileSync(this.configPath, text, 'utf8');

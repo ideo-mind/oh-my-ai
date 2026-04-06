@@ -6,9 +6,24 @@ import * as os from 'node:os';
 import { KeyRotator } from './keyRotator';
 import { GeminiClient } from './geminiClient';
 import { OpenAIClient } from './openaiClient';
+import { Config } from './config';
 
 export class ProxyServer {
-  constructor(config, geminiClient = null, openaiClient = null) {
+  private config: Config;
+  private geminiClient: GeminiClient | null;
+  private openaiClient: OpenAIClient | null;
+  private providerClients: Map<string, any>;
+  private server: http.Server | null;
+  private adminSessionToken: string | null;
+  private logBuffer: any[];
+  private logHistory: any[];
+  private sseLogClients: Map<string, { res: http.ServerResponse, keepAliveInterval: any }>;
+  private logFilePath: string;
+  private responseStorage: Map<string, any>;
+  private failedLoginAttempts: number;
+  private loginBlockedUntil: number | null;
+
+  constructor(config: Config, geminiClient: GeminiClient | null = null, openaiClient: OpenAIClient | null = null) {
     this.config = config;
     this.geminiClient = geminiClient;
     this.openaiClient = openaiClient;
@@ -926,13 +941,13 @@ export class ProxyServer {
 
     try {
       clearInterval(client.keepAliveInterval);
-    } catch {}
+    } catch { }
 
     try {
       if (client.res && !client.res.writableEnded) {
         client.res.end();
       }
-    } catch {}
+    } catch { }
   }
 
   closeAllSseLogClients() {
@@ -1382,11 +1397,18 @@ export class ProxyServer {
 
 
   resolveLogFilePath() {
-    const configuredPath = process.env.AIKEY_LOG_FILE || process.env.LOG_FILE_PATH;
-    if (configuredPath && configuredPath.trim()) {
-      return path.resolve(configuredPath.trim());
+    // Priority: Environment Variable > Config File > Default
+    const envPath = process.env.LOG_FILE || process.env.LOG_FILE_PATH;
+    if (envPath && envPath.trim()) {
+      return path.resolve(envPath.trim());
     }
-    return path.join(os.tmpdir(), 'aikey.log');
+
+    const configPath = this.config.getLogFilePath();
+    if (configPath && configPath.trim()) {
+      return path.resolve(configPath.trim());
+    }
+
+    return path.join(os.tmpdir(), 'oh-my-ai.log');
   }
 
   ensureLogFileDirectory() {
