@@ -564,6 +564,11 @@ export class ProxyServer {
       `type=${contentType}`,
       `size=${contentLength}b`
     ];
+
+    if (response.meta?.burstSize > 1) {
+      parts.push(`burst=${response.meta.burstSize}/${response.meta.burstAttempts}`);
+    }
+
     const errorMessage = this.extractResponseErrorMessage(response.data);
 
     if (errorMessage && response.statusCode >= 400) {
@@ -1315,7 +1320,9 @@ export class ProxyServer {
       requestType: meta.requestType || (status === null ? 'request' : 'response'),
       apiKeyMasked: meta.apiKeyMasked || null,
       apiKeyId: meta.apiKeyId || null,
-      apiKeyLabel: meta.apiKeyLabel || meta.apiKeyMasked || meta.apiKeyId || null
+      apiKeyLabel: meta.apiKeyLabel || meta.apiKeyMasked || meta.apiKeyId || null,
+      burstSize: meta.burstSize || 1,
+      burstAttempts: meta.burstAttempts || 1
     };
 
     this.logRequest(logEntry);

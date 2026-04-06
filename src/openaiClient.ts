@@ -55,7 +55,7 @@ export class OpenAIClient {
         const { response, apiKey } = successResult.value;
         const maskedKey = this.maskApiKey(apiKey);
         console.log(`[OPENAI::${maskedKey}] ok ${response.statusCode}`);
-        return this.attachResponseMeta(response, apiKey, 'rotation');
+        return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
       }
 
       const hardErrorResult = results.find(r => r.status === 'fulfilled' && r.value.type === 'hard_error');
@@ -63,7 +63,7 @@ export class OpenAIClient {
         const { response, apiKey } = hardErrorResult.value;
         const maskedKey = this.maskApiKey(apiKey);
         console.log(`[OPENAI::${maskedKey}] fail ${response.statusCode} (terminal)`);
-        return this.attachResponseMeta(response, apiKey, 'rotation');
+        return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
       }
 
       for (const result of results) {
@@ -93,7 +93,7 @@ export class OpenAIClient {
             code: 'rate_limit_exceeded'
           }
         })
-      }, requestContext.getLastFailedKey(), 'rotation');
+      }, requestContext.getLastFailedKey(), 'rotation', this.burstSize, requestContext.triedKeys.size);
     }
 
     if (lastError) {
@@ -103,7 +103,7 @@ export class OpenAIClient {
     throw new Error('All API keys exhausted without clear error');
   }
 
-  attachResponseMeta(response, apiKey, requestType = 'rotation') {
+  attachResponseMeta(response, apiKey, requestType = 'rotation', burstSize = 1, burstAttempts = 1) {
     if (!response) {
       return response;
     }
@@ -115,7 +115,9 @@ export class OpenAIClient {
       requestType,
       apiKeyMasked,
       apiKeyId,
-      apiKeyLabel: `${apiKeyMasked} (${apiKeyId})`
+      apiKeyLabel: `${apiKeyMasked} (${apiKeyId})`,
+      burstSize,
+      burstAttempts
     };
 
     return response;

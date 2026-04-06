@@ -25,7 +25,7 @@ export class GeminiClient {
       try {
         const response = await this.sendRequest(method, path, body, cleanHeaders, providedApiKey, true);
         console.log(`[GEMINI::${maskedKey}] ok ${response.statusCode}`);
-        return this.attachResponseMeta(response, providedApiKey, 'provided');
+        return this.attachResponseMeta(response, providedApiKey, 'provided', 1, 1);
       } catch (error) {
         console.error(`[GEMINI::${maskedKey}] fail ${error.message}`);
         throw error;
@@ -82,7 +82,7 @@ export class GeminiClient {
         const { response, apiKey } = successResult.value;
         const maskedKey = this.maskApiKey(apiKey);
         console.log(`[GEMINI::${maskedKey}] ok ${response.statusCode}`);
-        return this.attachResponseMeta(response, apiKey, 'rotation');
+        return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
       }
 
       const hardErrorResult = results.find(r => r.status === 'fulfilled' && r.value.type === 'hard_error');
@@ -90,7 +90,7 @@ export class GeminiClient {
         const { response, apiKey } = hardErrorResult.value;
         const maskedKey = this.maskApiKey(apiKey);
         console.log(`[GEMINI::${maskedKey}] fail ${response.statusCode} (terminal)`);
-        return this.attachResponseMeta(response, apiKey, 'rotation');
+        return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
       }
 
       for (const result of results) {
@@ -122,7 +122,7 @@ export class GeminiClient {
             status: 'RESOURCE_EXHAUSTED'
           }
         })
-      }, requestContext.getLastFailedKey(), 'rotation');
+      }, requestContext.getLastFailedKey(), 'rotation', this.burstSize, requestContext.triedKeys.size);
     }
 
     // If we had other types of errors, throw the last one
@@ -134,7 +134,7 @@ export class GeminiClient {
     throw new Error('All API keys exhausted without clear error');
   }
 
-  attachResponseMeta(response, apiKey, requestType = 'rotation') {
+  attachResponseMeta(response, apiKey, requestType = 'rotation', burstSize = 1, burstAttempts = 1) {
     if (!response) {
       return response;
     }
@@ -146,7 +146,9 @@ export class GeminiClient {
       requestType,
       apiKeyMasked,
       apiKeyId,
-      apiKeyLabel: `${apiKeyMasked} (${apiKeyId})`
+      apiKeyLabel: `${apiKeyMasked} (${apiKeyId})`,
+      burstSize,
+      burstAttempts
     };
 
     return response;
