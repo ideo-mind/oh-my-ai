@@ -524,7 +524,7 @@
                             <div class="section mt-8">
                                 <h3 class="text-lg font-medium tracking-tight mb-4">Add New Provider</h3>
                                 <div class="space-y-5">
-                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+                                    <div class="grid grid-cols-1 md:grid-cols-4 gap-5">
                                         <div class="space-y-2">
                                             <label class="text-sm font-medium leading-none">Provider Name</label>
                                             <input
@@ -557,6 +557,19 @@
                                                 oninput="handleBaseUrlInput(this); updateProviderPreview()"
                                             >
                                             <p class="text-[11px] text-muted-foreground">Optional unless custom name provided</p>
+                                        </div>
+                                        <div class="space-y-2">
+                                            <label class="text-sm font-medium leading-none">Burst Size</label>
+                                            <input
+                                                type="number"
+                                                id="newProviderBurstSize"
+                                                class="input-field w-full px-3 py-2 text-sm"
+                                                min="1"
+                                                max="5"
+                                                value="1"
+                                                oninput="updateProviderPreview()"
+                                            >
+                                            <p class="text-[11px] text-muted-foreground">Parallel requests (max 5)</p>
                                         </div>
                                     </div>
                                     <div class="space-y-3 pt-2">
@@ -900,6 +913,7 @@
                 if (provider.accessKey) nextEnvVars[`${prefix}_ACCESS_KEY`] = provider.accessKey;
                 if (provider.defaultModel) nextEnvVars[`${prefix}_DEFAULT_MODEL`] = provider.defaultModel;
                 if (provider.modelHistory && provider.modelHistory.length > 0) nextEnvVars[`${prefix}_MODEL_HISTORY`] = provider.modelHistory.join(',');
+                if (provider.burstSize) nextEnvVars[`${prefix}_BURST_SIZE`] = provider.burstSize.toString();
             }
             return nextEnvVars;
         }
@@ -1081,6 +1095,27 @@
                         };
                     }
                     providers[providerKey].modelHistory = value.split(',').map(m => m.trim()).filter(m => m);
+                } else if (key.endsWith('_BURST_SIZE') && value) {
+                    const match = key.match(/^(.+)_(.+)_BURST_SIZE$/);
+                    if (match && match.length >= 3) {
+                        const apiType = match[1].toLowerCase();
+                        const providerName = match[2].toLowerCase();
+                        const providerKey = `${apiType}_${providerName}`;
+
+                        if (!providers[providerKey]) {
+                            providers[providerKey] = {
+                                name: providerName,
+                                apiType: apiType,
+                                keys: [],
+                                baseUrl: '',
+                                accessKey: '',
+                                defaultModel: '',
+                                modelHistory: [],
+                                burstSize: 1
+                            };
+                        }
+                        providers[providerKey].burstSize = parseInt(value) || 1;
+                    }
                 }
             }
 
@@ -1134,7 +1169,8 @@
                 baseUrl: provider.baseUrl || undefined,
                 accessKey: provider.accessKey || null,
                 defaultModel: provider.defaultModel || null,
-                modelHistory: provider.modelHistory || []
+                modelHistory: provider.modelHistory || [],
+                burstSize: provider.burstSize || 1
             }));
 
             return { providers };
@@ -1656,8 +1692,8 @@
                                 </div>
                             </div>
 
-                            <!-- Access Key and Default Model Row -->
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                             <!-- Access Key, Default Model, and Burst Size Row -->
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                                 <div>
                                     <label class="block text-xs text-muted-foreground mb-1.5 font-medium">Access Key (Optional)</label>
                                     <div class="relative">
@@ -1757,6 +1793,33 @@
                                                 </div>
                                             `).join('') : ''}
                                         </div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-muted-foreground mb-1.5 font-medium">Burst Size (1-5)</label>
+                                    <div class="relative">
+                                        <input
+                                            type="number"
+                                            id="burstSize_${provider.apiType}_${provider.name}"
+                                            value="${provider.burstSize || 1}"
+                                            data-original="${provider.burstSize || 1}"
+                                            min="1"
+                                            max="5"
+                                            class="input-field w-full px-3 py-2 pr-10 text-xs rounded transition-colors"
+                                            oninput="checkForChanges('burstSize', '${provider.apiType}', '${provider.name}')"
+                                            onkeypress="if(event.key === 'Enter') saveBurstSize('${provider.apiType}', '${provider.name}')"
+                                        >
+                                        <button
+                                            id="saveBtn_burstSize_${provider.apiType}_${provider.name}"
+                                            onclick="saveBurstSize('${provider.apiType}', '${provider.name}')"
+                                            class="absolute right-2 top-1/2 -translate-y-1/2 cursor-not-allowed p-1"
+                                            style="pointer-events: none; opacity: 0.3;"
+                                            title="Nothing to save"
+                                        >
+                                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                                                <path d="M7 19V13H17V19H19V7.828L16.172 5H15V9H9V5H5V19H7ZM17 5V7H15V5H17ZM19 3L21 5V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H19Z"></path>
+                                            </svg>
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -1938,12 +2001,16 @@
             previewElement.parentElement.style.backgroundColor = 'var(--muted)/20';
             
             // Valid combinations
+            let burstSize = parseInt(document.getElementById('newProviderBurstSize').value, 10) || 1;
+            if (burstSize > 5) burstSize = 5;
+            if (burstSize < 1) burstSize = 1;
+
             if (!hasName && !hasBaseUrl) {
                 // Default provider
-                previewElement.innerHTML = `Will create <strong>default ${apiType.toUpperCase()}</strong> provider '<strong>${defaultConfig.name}</strong>' → <code>${defaultConfig.baseUrl}</code>`;
+                previewElement.innerHTML = `Will create <strong>default ${apiType.toUpperCase()}</strong> provider '<strong>${defaultConfig.name}</strong>' → <code>${defaultConfig.baseUrl}</code> (Burst: ${burstSize})`;
             } else {
                 // Custom provider (both name and base URL provided)
-                previewElement.innerHTML = `Will create <strong>custom</strong> provider '<strong>${name}</strong>' → <code>${baseUrl}</code>`;
+                previewElement.innerHTML = `Will create <strong>custom</strong> provider '<strong>${name}</strong>' → <code>${baseUrl}</code> (Burst: ${burstSize})`;
             }
         }
 
@@ -2071,9 +2138,17 @@
                 return;
             }
             
-            // Create environment variable names
-            const keysVar = `${apiType.toUpperCase()}_${name.toUpperCase()}_API_KEYS`;
-            const baseUrlVar = `${apiType.toUpperCase()}_${name.toUpperCase()}_BASE_URL`;
+            const burstSizeInput = document.getElementById('newProviderBurstSize');
+            let burstSize = parseInt(burstSizeInput.value, 10) || 1;
+            if (burstSize > 5) burstSize = 5;
+            if (burstSize < 1) burstSize = 1;
+            burstSizeInput.value = burstSize;
+
+            if (burstSize > apiKeyEntries.length) {
+                showWarningToast(`Burst size (${burstSize}) exceeds the number of API keys provided (${apiKeyEntries.length}). Parallelism will be limited by key count.`);
+            }
+
+            const burstSizeVar = `${apiType.toUpperCase()}_${name.toUpperCase()}_BURST_SIZE`;
             
             // Check if provider already exists
             if (envVars[keysVar]) {
@@ -2085,6 +2160,9 @@
             envVars[keysVar] = testedKeys.map(key => key.value).join(',');
             if (baseUrl) {
                 envVars[baseUrlVar] = baseUrl;
+            }
+            if (burstSize > 1) {
+                envVars[burstSizeVar] = burstSize.toString();
             }
             setStoredKeyDetails(apiType, name, testedKeys);
             
@@ -2099,6 +2177,7 @@
                     // Clear form
                     document.getElementById('newProviderName').value = '';
                     document.getElementById('newProviderBaseUrl').value = '';
+                    document.getElementById('newProviderBurstSize').value = '1';
                     
                     // Clear all key inputs
                     // Reset to single key input
@@ -2702,6 +2781,61 @@ ${googApiKeyHeader}  -H "Content-Type: application/json" \\
                 }
             } catch (error) {
                 showErrorToast(`Failed to save access key: ${error.message}`);
+            }
+        }
+
+        async function saveBurstSize(apiType, providerName) {
+            const inputId = `burstSize_${apiType}_${providerName}`;
+            const input = document.getElementById(inputId);
+
+            if (!input) {
+                showErrorToast('Burst size input not found');
+                return;
+            }
+
+            let burstSize = parseInt(input.value, 10) || 1;
+            if (burstSize > 5) burstSize = 5;
+            if (burstSize < 1) burstSize = 1;
+            input.value = burstSize;
+
+            const burstSizeVar = `${apiType.toUpperCase()}_${providerName.toUpperCase()}_BURST_SIZE`;
+
+            if (burstSize > 1) {
+                envVars[burstSizeVar] = burstSize.toString();
+            } else {
+                delete envVars[burstSizeVar];
+            }
+
+            try {
+                const response = await fetch('/admin/api/env', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(envVarsToAdminPayload())
+                });
+
+                if (response.ok) {
+                    input.setAttribute('data-original', burstSize);
+                    checkForChanges('burstSize', apiType, providerName);
+
+                    renderEnvVars();
+                    document.getElementById('skeletonLoader').classList.add('hidden');
+                    document.getElementById('realContent').classList.remove('hidden');
+                    
+                    const providers = buildProvidersFromEnvVars();
+                    const providerKey = `${apiType}_${providerName}`;
+                    const provider = providers[providerKey];
+                    const activeKeys = (provider?.keyDetails || []).filter(k => k.active !== false).length;
+                    
+                    if (burstSize > activeKeys && activeKeys > 0) {
+                        showWarningToast(`🚀 Burst size saved as ${burstSize}, but you only have ${activeKeys} active keys. Effective parallelism will be ${activeKeys}.`);
+                    } else {
+                        showSuccessToast(`🚀 Burst size updated to ${burstSize} for provider '${providerName}'`);
+                    }
+                } else {
+                    showErrorToast('Failed to save burst size');
+                }
+            } catch (error) {
+                showErrorToast(`Failed to save burst size: ${error.message}`);
             }
         }
 

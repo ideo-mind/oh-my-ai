@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Config } from '../src/config.ts';
 import { ProxyServer } from '../src/server.ts';
+import { GeminiClient } from '../src/geminiClient.ts';
 import { KeyRotator } from '../src/keyRotator.ts';
 
 const originalConfigFile = process.env.CONFIG_FILE;
@@ -273,6 +274,186 @@ await run('KeyRotator getNextBatch and smart shuffle', async () => {
   const sortedOriginal4 = [...keys].sort();
   const sortedCurrent4 = [...allKeys4].sort();
   assert.deepEqual(sortedCurrent4, sortedOriginal4);
+});
+
+await run('KeyRotator can prefer tier 1+ keys when requested', async () => {
+  const rotator = new KeyRotator(
+    ['tier0', 'tier1', 'tier2'],
+    'gemini',
+    [
+      { value: 'tier0', tier: '0', active: true },
+      { value: 'tier1', tier: '1', active: true },
+      { value: 'tier2', tier: '2', active: true }
+    ]
+  );
+
+  const context = rotator.createRequestContext({ minTier: 1 });
+  const batch = context.getNextBatch(3);
+
+  assert.equal(batch.includes('tier0'), false);
+  assert.equal(batch.length, 2);
+  assert.ok(batch.includes('tier1'));
+  assert.ok(batch.includes('tier2'));
+});
+
+await run('GeminiClient retries any deprecated Gemini model request on tier 1+ keys', async () => {
+  const firstContext = {
+    triedKeys: new Set(['tier0']),
+    getNextBatch: () => ['tier0'],
+    getLastFailedKey: () => 'tier0',
+    markKeyAsRateLimited: () => {},
+    markKeyAsFailed: () => {},
+    allTriedKeysRateLimited: () => false
+  };
+
+  const fallbackContext = {
+    triedKeys: new Set(['tier1']),
+    getNextBatch: () => ['tier1'],
+    getLastFailedKey: () => 'tier1',
+    markKeyAsRateLimited: () => {},
+    markKeyAsFailed: () => {},
+    allTriedKeysRateLimited: () => false
+  };
+
+  const rotator = {
+    createRequestContext: (options = {}) => (options.minTier === 1 ? fallbackContext : firstContext),
+    updateLastFailedKey: () => {}
+  };
+
+  const client = new GeminiClient(rotator, 'https://generativelanguage.googleapis.com/v1beta', 1);
+  const calls = [];
+
+  client.sendRequest = async (method, path, body, headers, apiKey) => {
+    calls.push({ method, path, apiKey, body });
+
+    if (apiKey === 'tier0') {
+      return {
+        statusCode: 400,
+        headers: { 'content-type': 'application/json' },
+        data: Buffer.from(JSON.stringify({
+          error: {
+            code: 400,
+            message: 'This model models/gemini-1.5-pro is no longer available to new users.',
+            status: 'FAILED_PRECONDITION'
+          }
+        }))
+      };
+    }
+
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      data: Buffer.from(JSON.stringify({ ok: true }))
+    };
+  };
+
+  const response = await client.makeRequest(
+    'POST',
+    '/models/gemini-1.5-pro:generateContent',
+    JSON.stringify({ model: 'gemini-1.5-pro', contents: [] }),
+    {}
+  );
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].path.includes('gemini-1.5-pro'));
+  assert.ok(calls[1].path.includes('gemini-2.5'));
+  assert.notEqual(calls[1].path.includes('gemini-1.5-pro'), true);
+  assert.equal(calls[0].apiKey, 'tier0');
+  assert.equal(calls[1].apiKey, 'tier1');
+});
+
+await run('GeminiClient does not rotate on 429 when burstSize is 1', async () => {
+  const requestContext = {
+    triedKeys: new Set(['tier0']),
+    getNextBatch: () => ['tier0'],
+    getLastFailedKey: () => 'tier0',
+    markKeyAsRateLimited: () => {},
+    markKeyAsFailed: () => {},
+    allTriedKeysRateLimited: () => false
+  };
+
+  const rotator = {
+    createRequestContext: () => requestContext,
+    updateLastFailedKey: () => {}
+  };
+
+  const client = new GeminiClient(rotator, 'https://generativelanguage.googleapis.com/v1beta', 1);
+  const calls = [];
+
+  client.sendRequest = async (method, path, body, headers, apiKey) => {
+    calls.push({ method, path, apiKey, body });
+    return {
+      statusCode: 429,
+      headers: { 'content-type': 'application/json' },
+      data: Buffer.from(JSON.stringify({
+        error: {
+          code: 429,
+          message: 'rate limited',
+          status: 'RESOURCE_EXHAUSTED'
+        }
+      }))
+    };
+  };
+
+  const response = await client.makeRequest(
+    'POST',
+    '/models/gemini-2.5-flash:generateContent',
+    JSON.stringify({ model: 'gemini-2.5-flash', contents: [] }),
+    {}
+  );
+
+  assert.equal(response.statusCode, 429);
+  assert.equal(calls.length, 1);
+});
+
+await run('Gemini header handling strips inbound user-agent and sets browser UA', async () => {
+  const config = {
+    getPort: () => 8990,
+    getProviders: () => new Map(),
+    hasGeminiKeys: () => false,
+    hasOpenaiKeys: () => false,
+    hasAdminPassword: () => false
+  };
+  const server = new ProxyServer(config);
+
+  const serverHeaders = server.extractRelevantHeaders({
+    'content-type': 'application/json',
+    accept: 'application/json',
+    'user-agent': 'oh-my-ai/1.0',
+    'x-goog-api-client': 'gl-node/22.0',
+    'x-goog-user-project': 'billing-project',
+    authorization: 'Bearer ignore-me'
+  }, 'gemini');
+
+  assert.deepEqual(serverHeaders, {
+    'content-type': 'application/json',
+    accept: 'application/json',
+    'x-goog-api-client': 'gl-node/22.0',
+    'x-goog-user-project': 'billing-project'
+  });
+
+  const client = new GeminiClient({
+    createRequestContext: () => ({})
+  });
+  client.getRandomBrowserUserAgent = () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
+
+  const clientHeaders = client.buildGeminiHeaders({
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    'User-Agent': 'oh-my-ai/1.0',
+    'X-Goog-Api-Client': 'gl-node/22.0',
+    'X-Goog-User-Project': 'billing-project',
+    'X-Ignored': 'nope'
+  });
+
+  assert.deepEqual(clientHeaders, {
+    'content-type': 'application/json',
+    accept: 'application/json',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+    'x-goog-api-client': 'gl-node/22.0',
+    'x-goog-user-project': 'billing-project'
+  });
 });
 
 if (originalConfigFile === undefined) {

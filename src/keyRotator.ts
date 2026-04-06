@@ -1,7 +1,10 @@
 export class KeyRotator {
-  constructor(apiKeys, apiType = 'unknown') {
-    this.apiKeys = [...apiKeys];
+  constructor(apiKeys, apiType = 'unknown', apiKeysDetailed = []) {
     this.apiType = apiType;
+    this.apiKeyDetails = this.normalizeApiKeyDetails(apiKeysDetailed, apiKeys);
+    this.apiKeys = this.apiKeyDetails
+      .filter((key) => key.active !== false)
+      .map((key) => key.value);
     this.lastFailedKey = null; // Track the key that failed in the last request
     console.log(`[${apiType.toUpperCase()}-ROTATOR] init keys=${this.apiKeys.length}`);
   }
@@ -10,8 +13,9 @@ export class KeyRotator {
    * Creates a new request context for per-request key rotation with smart shuffling
    * @returns {RequestKeyContext} A new context for managing keys for a single request
    */
-  createRequestContext() {
-    return new RequestKeyContext(this.apiKeys, this.apiType, this.lastFailedKey);
+  createRequestContext(options = {}) {
+    const eligibleKeys = this.selectKeysForRequest(options);
+    return new RequestKeyContext(eligibleKeys, this.apiType, this.lastFailedKey, options);
   }
 
   /**
@@ -30,6 +34,63 @@ export class KeyRotator {
     return this.apiKeys.length;
   }
 
+  normalizeApiKeyDetails(apiKeysDetailed, fallbackKeys) {
+    const detailed = Array.isArray(apiKeysDetailed)
+      ? apiKeysDetailed
+          .filter((key) => typeof key?.value === 'string' && key.value.trim().length > 0)
+          .map((key) => ({
+            value: key.value.trim(),
+            label: key.label?.trim() || null,
+            tier: key.tier?.trim() || null,
+            active: key.active !== false
+          }))
+      : [];
+
+    if (detailed.length > 0) {
+      return detailed;
+    }
+
+    return (Array.isArray(fallbackKeys) ? fallbackKeys : [])
+      .filter((key) => typeof key === 'string' && key.trim().length > 0)
+      .map((key) => ({
+        value: key.trim(),
+        label: null,
+        tier: null,
+        active: true
+      }));
+  }
+
+  selectKeysForRequest(options = {}) {
+    const activeKeys = this.apiKeyDetails
+      .filter((key) => key.active !== false)
+      .map((key) => key.value);
+
+    const minTier = this.normalizeTier(options.minTier);
+    if (minTier === null) {
+      return activeKeys;
+    }
+
+    const tieredKeys = this.apiKeyDetails.filter((key) => {
+      if (key.active === false) {
+        return false;
+      }
+
+      const tier = this.normalizeTier(key.tier);
+      return tier !== null && tier >= minTier;
+    }).map((key) => key.value);
+
+    return tieredKeys.length > 0 ? tieredKeys : activeKeys;
+  }
+
+  normalizeTier(tier) {
+    if (tier === undefined || tier === null || tier === '') {
+      return null;
+    }
+
+    const parsed = Number(tier);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
   maskApiKey(key) {
     if (!key || key.length < 8) return '***';
     return key.substring(0, 4) + '...' + key.substring(key.length - 4);
@@ -41,13 +102,14 @@ export class KeyRotator {
  * Each request gets its own context to try all available keys with smart shuffling
  */
 class RequestKeyContext {
-  constructor(apiKeys, apiType, lastFailedKey = null) {
+  constructor(apiKeys, apiType, lastFailedKey = null, options = {}) {
     this.originalApiKeys = [...apiKeys];
     this.apiType = apiType;
     this.currentIndex = 0;
     this.triedKeys = new Set();
     this.rateLimitedKeys = new Set();
     this.lastFailedKeyForThisRequest = null;
+    this.minTier = options.minTier ?? null;
     
     // Apply smart shuffling: shuffle keys but move last failed key to end
     this.apiKeys = this.smartShuffle(apiKeys, lastFailedKey);
@@ -143,6 +205,15 @@ class RequestKeyContext {
     
     // Move to next key for the next attempt
     this.currentIndex = (this.currentIndex + 1) % this.apiKeys.length;
+  }
+
+  /**
+   * Marks the current key as the latest failure for this request.
+   * This is used for terminal errors where we still want to remember the last key.
+   * @param {string} key The API key that failed
+   */
+  markKeyAsFailed(key) {
+    this.lastFailedKeyForThisRequest = key;
   }
 
   /**

@@ -141,6 +141,8 @@ curl -X POST "http://localhost:8990/gemini/models/gemini-2.5-flash:generateConte
 
 If `accessKey` is not configured for a provider, omit `[ACCESS_KEY:...]`.
 
+Gemini requests that fail with the "no longer available to new users" model message are retried with tier 1+ API keys, and the proxy rewrites common older Gemini model routes to newer equivalents when possible.
+
 ## Security Notes
 
 - Change the default `adminPassword` before exposing the service.

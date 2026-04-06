@@ -32,15 +32,109 @@ export class GeminiClient {
       }
     }
 
-    // No API key provided, use rotation system
-    // Create a new request context for this specific request
-    const requestContext = this.keyRotator.createRequestContext();
+    const rotationStatusCodes = this.resolveRotationStatusCodes(customStatusCodes);
+    const initialAttempt = await this.executeRotatingRequest(method, path, body, headers, rotationStatusCodes);
+
+    if (initialAttempt.type === 'success') {
+      const { response, apiKey, requestContext } = initialAttempt;
+      const maskedKey = this.maskApiKey(apiKey);
+      console.log(`[GEMINI::${maskedKey}] ok ${response.statusCode}`);
+      return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
+    }
+
+    if (initialAttempt.type === 'model_upgrade_needed') {
+      const upgraded = this.upgradeGeminiModelRequest(path, body);
+      const fallbackAttempt = await this.executeRotatingRequest(
+        method,
+        upgraded.path,
+        upgraded.body,
+        headers,
+        rotationStatusCodes,
+        { minTier: 1 }
+      );
+
+      if (fallbackAttempt.type === 'success') {
+        const { response, apiKey, requestContext } = fallbackAttempt;
+        const maskedKey = this.maskApiKey(apiKey);
+        console.log(`[GEMINI::${maskedKey}] ok ${response.statusCode}`);
+        return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
+      }
+
+      if (fallbackAttempt.type === 'hard_error') {
+        const { response, apiKey, requestContext } = fallbackAttempt;
+        const maskedKey = this.maskApiKey(apiKey);
+        console.log(`[GEMINI::${maskedKey}] fail ${response.statusCode} (terminal)`);
+        return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
+      }
+
+      if (fallbackAttempt.type === 'model_upgrade_needed') {
+        const { response, apiKey, requestContext } = fallbackAttempt;
+        const maskedKey = this.maskApiKey(apiKey);
+        console.log(`[GEMINI::${maskedKey}] fail ${response.statusCode} (terminal)`);
+        return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
+      }
+
+      if (fallbackAttempt.type === 'rate_limited') {
+        console.warn('[GEMINI] 429 exhausted');
+        return this.attachResponseMeta(fallbackAttempt.response, fallbackAttempt.apiKey, 'rotation', this.burstSize, fallbackAttempt.requestContext.triedKeys.size);
+      }
+
+      if (fallbackAttempt.lastError) {
+        throw fallbackAttempt.lastError;
+      }
+
+      throw fallbackAttempt.error || initialAttempt.error || new Error('All API keys exhausted without clear error');
+    }
+
+    if (initialAttempt.type === 'hard_error') {
+      const { response, apiKey, requestContext } = initialAttempt;
+      const maskedKey = this.maskApiKey(apiKey);
+      console.log(`[GEMINI::${maskedKey}] fail ${response.statusCode} (terminal)`);
+      return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
+    }
+
+    if (initialAttempt.type === 'model_upgrade_needed') {
+      const { response, apiKey, requestContext } = initialAttempt;
+      const maskedKey = this.maskApiKey(apiKey);
+      console.log(`[GEMINI::${maskedKey}] fail ${response.statusCode} (terminal)`);
+      return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
+    }
+
+    if (initialAttempt.type === 'rate_limited') {
+      console.warn('[GEMINI] 429 exhausted');
+      return this.attachResponseMeta(initialAttempt.response, initialAttempt.apiKey, 'rotation', this.burstSize, initialAttempt.requestContext.triedKeys.size);
+    }
+
+    if (initialAttempt.lastError) {
+      throw initialAttempt.lastError;
+    }
+
+    throw initialAttempt.error || new Error('All API keys exhausted without clear error');
+  }
+
+  resolveRotationStatusCodes(customStatusCodes = null) {
+    if (customStatusCodes instanceof Set) {
+      return customStatusCodes;
+    }
+
+    if (Array.isArray(customStatusCodes)) {
+      return new Set(customStatusCodes);
+    }
+
+    // Burst size 1 is the conservative mode for Gemini. In that mode we do not
+    // implicitly fan out on 429, because Gemini often rate limits per project/IP
+    // and retrying every key just burns the whole pool.
+    if (this.burstSize <= 1) {
+      return new Set();
+    }
+
+    return new Set([429]);
+  }
+
+  async executeRotatingRequest(method, path, body, headers, rotationStatusCodes, options = {}) {
+    const requestContext = options.requestContext || this.keyRotator.createRequestContext(options);
     let lastError = null;
     let lastResponse = null;
-
-    // Determine which status codes should trigger rotation
-    // Default is just 429, but can be overridden
-    const rotationStatusCodes = customStatusCodes || new Set([429]);
 
     while (true) {
       const batch = requestContext.getNextBatch(this.burstSize);
@@ -67,12 +161,18 @@ export class GeminiClient {
             return { type: 'retryable', response, apiKey };
           }
 
+          requestContext.markKeyAsFailed(apiKey);
+          if (this.shouldRetryWithTieredKeys(path, response)) {
+            return { type: 'model_upgrade_needed', response, apiKey };
+          }
+
           return { type: 'hard_error', response, apiKey };
         } catch (error) {
           if (error.name === 'AbortError') {
             return { type: 'aborted' };
           }
           console.error(`[GEMINI::${maskedKey}] fail ${error.message}`);
+          requestContext.markKeyAsFailed(apiKey);
           return { type: 'error', error, apiKey };
         }
       }));
@@ -80,17 +180,21 @@ export class GeminiClient {
       const successResult = results.find(r => r.status === 'fulfilled' && r.value.type === 'success');
       if (successResult) {
         const { response, apiKey } = successResult.value;
-        const maskedKey = this.maskApiKey(apiKey);
-        console.log(`[GEMINI::${maskedKey}] ok ${response.statusCode}`);
-        return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
+        return { type: 'success', response, apiKey, requestContext };
+      }
+
+      const fallbackCandidate = results.find(r => r.status === 'fulfilled' && r.value.type === 'model_upgrade_needed');
+      if (fallbackCandidate) {
+        const { response, apiKey } = fallbackCandidate.value;
+        this.keyRotator.updateLastFailedKey(requestContext.getLastFailedKey() || apiKey);
+        return { type: 'model_upgrade_needed', response, apiKey, requestContext };
       }
 
       const hardErrorResult = results.find(r => r.status === 'fulfilled' && r.value.type === 'hard_error');
       if (hardErrorResult) {
         const { response, apiKey } = hardErrorResult.value;
-        const maskedKey = this.maskApiKey(apiKey);
-        console.log(`[GEMINI::${maskedKey}] fail ${response.statusCode} (terminal)`);
-        return this.attachResponseMeta(response, apiKey, 'rotation', this.burstSize, requestContext.triedKeys.size);
+        this.keyRotator.updateLastFailedKey(requestContext.getLastFailedKey() || apiKey);
+        return { type: 'hard_error', response, apiKey, requestContext };
       }
 
       for (const result of results) {
@@ -105,33 +209,35 @@ export class GeminiClient {
       }
     }
 
-    // Update the KeyRotator with the last failed key from this request
+    if (requestContext.allTriedKeysRateLimited()) {
+      const lastFailedKey = requestContext.getLastFailedKey();
+      this.keyRotator.updateLastFailedKey(lastFailedKey);
+      return {
+        type: 'rate_limited',
+        response: lastResponse || {
+          statusCode: 429,
+          headers: { 'content-type': 'application/json' },
+          data: JSON.stringify({
+            error: {
+              code: 429,
+              message: 'All API keys returned 429',
+              status: 'RESOURCE_EXHAUSTED'
+            }
+          })
+        },
+        apiKey: lastFailedKey,
+        requestContext
+      };
+    }
+
     const lastFailedKey = requestContext.getLastFailedKey();
     this.keyRotator.updateLastFailedKey(lastFailedKey);
 
-    // If all tried keys were rate limited, return 429
-    if (requestContext.allTriedKeysRateLimited()) {
-      console.warn('[GEMINI] 429 exhausted');
-      return this.attachResponseMeta(lastResponse || {
-        statusCode: 429,
-        headers: { 'content-type': 'application/json' },
-        data: JSON.stringify({
-          error: {
-            code: 429,
-            message: 'All API keys returned 429',
-            status: 'RESOURCE_EXHAUSTED'
-          }
-        })
-      }, requestContext.getLastFailedKey(), 'rotation', this.burstSize, requestContext.triedKeys.size);
-    }
-
-    // If we had other types of errors, throw the last one
     if (lastError) {
-      throw lastError;
+      return { type: 'error', error: lastError, lastError, requestContext };
     }
 
-    // Fallback error
-    throw new Error('All API keys exhausted without clear error');
+    return { type: 'exhausted', error: new Error('All API keys exhausted without clear error'), requestContext };
   }
 
   attachResponseMeta(response, apiKey, requestType = 'rotation', burstSize = 1, burstAttempts = 1) {
@@ -152,6 +258,107 @@ export class GeminiClient {
     };
 
     return response;
+  }
+
+  shouldRetryWithTieredKeys(path, response) {
+    const responseText = this.getResponseText(response?.data).toLowerCase();
+    if (!responseText.includes('no longer available to new users')) {
+      return false;
+    }
+
+    return this.isGeminiModelPath(path) || this.hasGeminiModelInBody(path);
+  }
+
+  upgradeGeminiModelRequest(path, body) {
+    const upgradedPath = this.upgradeGeminiModelPath(path);
+    const upgradedBody = this.upgradeGeminiModelBody(body);
+
+    if (upgradedPath !== path || upgradedBody !== body) {
+      console.warn(`[GEMINI] retrying with upgraded model route: ${upgradedPath}`);
+    }
+
+    return {
+      path: upgradedPath,
+      body: upgradedBody
+    };
+  }
+
+  upgradeGeminiModelPath(path) {
+    if (typeof path !== 'string') {
+      return path;
+    }
+
+    const modelMap = [
+      ['gemini-2.0-flash-lite', 'gemini-2.5-flash-lite'],
+      ['gemini-2.0-flash', 'gemini-2.5-flash'],
+      ['gemini-2.0-pro', 'gemini-2.5-pro'],
+      ['gemini-2.0-pro-exp', 'gemini-2.5-pro'],
+      ['gemini-1.5-flash', 'gemini-2.5-flash'],
+      ['gemini-1.5-pro', 'gemini-2.5-pro']
+    ];
+
+    let nextPath = path;
+    for (const [from, to] of modelMap) {
+      nextPath = nextPath.replace(new RegExp(from.replace(/\./g, '\\.'), 'g'), to);
+    }
+
+    return nextPath;
+  }
+
+  upgradeGeminiModelBody(body) {
+    const parsedBody = this.tryParseBody(body);
+    if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
+      return body;
+    }
+
+    const nextBody = { ...parsedBody };
+    let changed = false;
+
+    if (typeof nextBody.model === 'string') {
+      const upgradedModel = this.upgradeGeminiModelPath(nextBody.model);
+      if (upgradedModel !== nextBody.model) {
+        nextBody.model = upgradedModel;
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return body;
+    }
+
+    return typeof body === 'string' ? JSON.stringify(nextBody) : nextBody;
+  }
+
+  hasGeminiModelInBody(path) {
+    if (typeof path !== 'string') {
+      return false;
+    }
+
+    return /\/models\/[^/:]+:/.test(path);
+  }
+
+  getResponseText(data) {
+    if (!data) {
+      return '';
+    }
+
+    if (Buffer.isBuffer(data)) {
+      return data.toString('utf8');
+    }
+
+    return String(data);
+  }
+
+  isGeminiModelPath(path, modelNames = []) {
+    if (typeof path !== 'string') {
+      return false;
+    }
+
+    if (modelNames.length === 0) {
+      return /\/models\/[^/:]+:/.test(path);
+    }
+
+    return modelNames.some((modelName) => path.includes(`/models/${modelName}`) || path.includes(`/${modelName}:`));
   }
 
   sendRequest(method, path, body, headers, apiKey, useHeader = false, signal = null) {
@@ -299,6 +506,10 @@ export class GeminiClient {
       finalHeaders['content-type'] = 'application/json';
     }
 
+    if (!finalHeaders['user-agent']) {
+      finalHeaders['user-agent'] = this.getRandomBrowserUserAgent();
+    }
+
     return finalHeaders;
   }
 
@@ -306,6 +517,7 @@ export class GeminiClient {
     const allowedHeaders = new Set([
       'content-type',
       'accept',
+      'x-goog-api-client',
       'x-goog-user-project'
     ]);
     const sanitizedHeaders = {};
@@ -336,6 +548,19 @@ export class GeminiClient {
     }
 
     return null;
+  }
+
+  getRandomBrowserUserAgent() {
+    const userAgents = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) Gecko/20100101 Firefox/138.0',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0'
+    ];
+
+    const index = crypto.randomInt(0, userAgents.length);
+    return userAgents[index];
   }
 
   tryParseBody(body) {

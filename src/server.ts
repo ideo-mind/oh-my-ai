@@ -347,7 +347,7 @@ export class ProxyServer {
     }
 
     try {
-      const keyRotator = new KeyRotator(provider.apiKeys, provider.apiType);
+      const keyRotator = new KeyRotator(provider.apiKeys, provider.apiType, provider.apiKeysDetailed);
       let client: any;
 
       if (provider.apiType === 'openai') {
@@ -465,6 +465,7 @@ export class ProxyServer {
       headersToInclude = new Set([
         'content-type',
         'accept',
+        'x-goog-api-client',
         'x-goog-user-project'
         // Don't include x-goog-api-key here - we handle it separately
       ]);
