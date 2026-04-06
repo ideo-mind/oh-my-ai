@@ -117,6 +117,21 @@ class RequestKeyContext {
   }
 
   /**
+   * Gets a batch of available keys to try for this request
+   * @param {number} size The maximum number of keys to return
+   * @returns {string[]} An array of API keys, up to size
+   */
+  getNextBatch(size) {
+    const batch = [];
+    for (let i = 0; i < size; i++) {
+      const key = this.getNextKey();
+      if (!key) break;
+      batch.push(key);
+    }
+    return batch;
+  }
+
+  /**
    * Marks the current key as rate limited for this request
    * @param {string} key The API key that was rate limited
    */
