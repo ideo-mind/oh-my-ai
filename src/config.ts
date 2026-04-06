@@ -18,6 +18,7 @@ export type ProviderConfig = {
   defaultModel?: string | null;
   modelHistory?: string[];
   rotationStatusCodes?: number[];
+  burstSize?: number;
 };
 
 export type AdminProviderPayload = ProviderConfig & {
@@ -143,6 +144,7 @@ export class Config {
       const rotationStatusCodes = Array.isArray(cfg.rotationStatusCodes)
         ? cfg.rotationStatusCodes.map(code => Number(code)).filter(code => !Number.isNaN(code))
         : [];
+      const burstSize = cfg.burstSize !== undefined ? Number(cfg.burstSize) : 1;
 
       map.set(providerName, {
         apiType,
@@ -153,6 +155,7 @@ export class Config {
         defaultModel,
         modelHistory,
         rotationStatusCodes,
+        burstSize,
       });
     }
 
@@ -333,6 +336,7 @@ export class Config {
         defaultModel: config.defaultModel ?? null,
         modelHistory: [...(config.modelHistory ?? [])],
         rotationStatusCodes: [...(config.rotationStatusCodes ?? [])],
+        burstSize: config.burstSize,
       })),
     };
   }
@@ -429,6 +433,7 @@ export class Config {
         defaultModel: provider.defaultModel ?? null,
         modelHistory: [...(provider.modelHistory ?? [])],
         rotationStatusCodes: [...(provider.rotationStatusCodes ?? [])],
+        burstSize: provider.burstSize ?? 1,
       };
     }
 
