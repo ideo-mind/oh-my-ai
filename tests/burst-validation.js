@@ -134,6 +134,25 @@ describe('Burst Mode Validation', () => {
     expect(abortedCount).toBeGreaterThanOrEqual(1);
   });
 
+  test('Burst request does not hang forever when upstream never responds', async () => {
+    requestsReceived = [];
+
+    const apiKeys = ['hang-1', 'hang-2'];
+    const rotator = new KeyRotator(apiKeys, 'openai');
+    const client = new OpenAIClient(rotator, baseUrl, 2, 100);
+
+    currentHandler = () => {
+      // Intentionally do nothing so the client-side timeout is the only escape hatch.
+    };
+
+    const startedAt = Date.now();
+    await expect(client.makeRequest('POST', '/chat', { prompt: 'hi' })).rejects.toThrow(/timed out/i);
+    const elapsed = Date.now() - startedAt;
+
+    expect(elapsed).toBeLessThan(2000);
+    expect(requestsReceived.length).toBe(2);
+  });
+
   test('Rotation on 429', async () => {
     requestsReceived = [];
     

@@ -3,10 +3,11 @@ import * as crypto from 'node:crypto';
 import { URL } from 'node:url';
 
 export class OpenAIClient {
-  constructor(keyRotator, baseUrl = 'https://api.openai.com', burstSize = 1) {
+  constructor(keyRotator, baseUrl = 'https://api.openai.com', burstSize = 1, requestTimeoutMs = 120000) {
     this.keyRotator = keyRotator;
     this.baseUrl = baseUrl;
     this.burstSize = burstSize;
+    this.requestTimeoutMs = requestTimeoutMs;
   }
 
   async makeRequest(method, path, body, headers = {}, customStatusCodes = null) {
@@ -125,6 +126,7 @@ export class OpenAIClient {
 
   sendRequest(method, path, body, headers, apiKey, signal = null) {
     return new Promise((resolve, reject) => {
+      let settled = false;
       let fullUrl = '';
       if (!path || path === '/') {
         fullUrl = this.baseUrl;
@@ -167,6 +169,9 @@ export class OpenAIClient {
         });
 
         res.on('end', () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
           resolve({
             statusCode: res.statusCode,
             headers: res.headers,
@@ -175,11 +180,31 @@ export class OpenAIClient {
         });
       });
 
+      const timeoutId = Number.isFinite(this.requestTimeoutMs) && this.requestTimeoutMs > 0
+        ? setTimeout(() => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            const timeoutError = new Error(`Request timed out after ${this.requestTimeoutMs}ms`);
+            timeoutError.name = 'TimeoutError';
+            reject(timeoutError);
+            req.destroy(timeoutError);
+          }, this.requestTimeoutMs)
+        : null;
+
       req.on('error', (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
         const maskedKey = this.maskApiKey(apiKey);
         console.error(`[OPENAI::${maskedKey}] http ${error.message}`);
         reject(error);
       });
+
+      if (signal) {
+        signal.addEventListener('abort', () => clearTimeout(timeoutId), { once: true });
+      }
 
       if (body && method !== 'GET') {
         const bodyData = typeof body === 'string' ? body : JSON.stringify(body);
